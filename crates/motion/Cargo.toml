@@ -1,0 +1,22 @@
+[package]
+name = "bezel-motion"
+description = "A named animation catalog for gpui — exact CSS cubic-bezier curves and pure phase math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui.workspace = true
+
+[dev-dependencies]
+bezel-theme.workspace = true
