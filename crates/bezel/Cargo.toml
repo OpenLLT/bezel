@@ -1,7 +1,6 @@
 [package]
-name = "bezel-ui"
-
-description = "SwiftUI-flavored components for gpui — popovers, menus, buttons, toggles, and loaders"
+name = "bezel"
+description = "A SwiftUI-flavored component library for gpui — tokens, motion, and components in one dependency"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,7 +16,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-bezel-theme.workspace = true
 bezel-motion.workspace = true
+bezel-theme.workspace = true
+bezel-ui.workspace = true
 gpui.workspace = true
-unicode-segmentation = "1"

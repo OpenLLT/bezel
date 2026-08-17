@@ -1,28 +1,62 @@
 //! The bezel gallery — every component rendered in a real window. This is the
 //! dev surface: new components land here the day they land in `crates/ui`.
+//!
+//! The view itself lives in `lib.rs`, so `shots` can mount its sections one at
+//! a time; this file is the window around it.
 
 use bezel_theme::{Theme, appearance};
-use bezel_ui::{icons, loaders, popover, widgets};
+use bezel_ui::{combobox, date, focus, icons, input, menubar, palette, tree};
+use gallery::{Gallery, OpenPalette, ToggleFullScreen, ToggleInspector};
 use gpui::{
-    App, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    size,
+    App, AppContext as _, Bounds, KeyBinding, Menu, MenuItem, WindowBounds, WindowOptions, actions,
+    px, size,
 };
+
+actions!(gallery_app, [Quit]);
 
 fn main() {
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(|cx: &mut App| {
-            bezel_ui::register_fonts(cx).ok();
+            if let Err(err) = bezel_ui::register_fonts(cx) {
+                eprintln!("FONT REGISTRATION FAILED: {err:?}");
+            }
             appearance::init(appearance::AppearanceMode::System, cx);
-            let bounds = Bounds::centered(None, size(px(960.0), px(760.0)), cx);
+            input::init(cx);
+            palette::init(cx);
+            combobox::init(cx);
+            date::init(cx);
+            focus::init(cx);
+            menubar::init(cx);
+            tree::init(cx);
+            cx.bind_keys([
+                KeyBinding::new("cmd-k", OpenPalette, None),
+                KeyBinding::new("cmd-alt-i", ToggleInspector, None),
+                // Both of the macOS defaults. Bound before `set_menus` so the
+                // menu item can pick the keystroke up off the keymap.
+                KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+                KeyBinding::new("fn-f", ToggleFullScreen, None),
+            ]);
+            #[cfg(debug_assertions)]
+            gallery::inspector::init(cx);
+            set_menus(cx);
+            let bounds = Bounds::centered(None, size(px(1000.0), px(860.0)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    // Glass needs a blurred window background to blur INTO;
+                    // without it `material` has nothing behind it.
+                    window_background: Theme::of(cx).window_background_appearance(),
                     ..Default::default()
                 },
                 |window, cx| {
                     appearance::observe_window(window, cx).detach();
-                    cx.new(|_| Gallery)
+                    let gallery = cx.new(Gallery::new);
+                    // The gallery itself takes focus, so its key context is
+                    // live from the first frame whatever page is showing.
+                    let focus = gallery.read(cx).focus_handle();
+                    window.focus(&focus, cx);
+                    gallery
                 },
             )
             .unwrap();
@@ -30,111 +64,18 @@ fn main() {
         });
 }
 
-struct Gallery;
-
-fn section(theme: &Theme, title: &str) -> gpui::Div {
-    div().flex().flex_col().gap(px(12.0)).child(
-        div()
-            .text_size(px(11.0))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.text_faint)
-            .child(SharedString::from(popover::tracked_upper(title))),
-    )
-}
-
-fn row() -> gpui::Div {
-    div().flex().flex_row().items_center().gap(px(12.0))
-}
-
-impl Render for Gallery {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
-        let view = cx.entity_id();
-
-        let buttons = section(&theme, "Buttons").child(
-            row()
-                .child(popover::button(&theme, "Ghost", "g-ghost"))
-                .child(popover::button_prominent(&theme, "Prominent"))
-                .child(popover::button_destructive(&theme, "Destructive")),
-        );
-
-        let toggles = section(&theme, "Toggle & badges").child(
-            row()
-                .child(widgets::toggle(&theme, true))
-                .child(widgets::toggle(&theme, false))
-                .child(widgets::badge(&theme, "badge"))
-                .child(widgets::badge_active(&theme, "active")),
-        );
-
-        let menu = section(&theme, "Menu").child(
-            popover::popover_card(&theme).w(px(240.0)).children([
-                popover::menu_heading(&theme, "Section").into_any_element(),
-                popover::menu_row(&theme, false, "m-one")
-                    .child("First item")
-                    .into_any_element(),
-                popover::menu_row(&theme, true, "m-two")
-                    .child("Active item")
-                    .into_any_element(),
-                popover::divider().into_any_element(),
-                popover::menu_row(&theme, false, "m-three")
-                    .child("Third item")
-                    .into_any_element(),
-            ]),
-        );
-
-        let group = section(&theme, "Group box").child(
-            widgets::group_box(&theme)
-                .child(
-                    widgets::card_row(&theme, true)
-                        .child(widgets::row_tile(&theme, icons::MONITOR))
-                        .child(widgets::row_title(&theme, "First row")),
-                )
-                .child(
-                    widgets::card_row(&theme, false)
-                        .child(widgets::row_tile(&theme, icons::FOLDER))
-                        .child(widgets::row_title(&theme, "Second row")),
-                ),
-        );
-
-        let spinners = section(&theme, "Loaders").child(
-            row()
-                .child(loaders::pulse_loader("g-pulse", &theme, 8.0, view, cx))
-                .child(loaders::gradient_spinner("g-spin", &theme, 5.0, view, cx))
-                .child(loaders::mini_gradient_spinner("g-mini", 2.5, view, cx))
-                .child(loaders::loading_word(&theme)),
-        );
-
-        let strips = section(&theme, "Strips & redacted")
-            .child(widgets::error_strip(&theme, "Something went wrong."))
-            .child(widgets::warning_strip(&theme, "Heads up, check this."))
-            .child(popover::redacted_rows("g-redacted", &theme, 3, view, cx));
-
-        div()
-            .id("gallery-scroll")
-            .size_full()
-            .overflow_y_scroll()
-            .bg(theme.bg)
-            .font_family(theme.font_sans.clone())
-            .text_color(theme.text)
-            .text_size(px(14.0))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(28.0))
-                    .p(px(32.0))
-                    .child(
-                        div()
-                            .text_size(px(18.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("bezel gallery"),
-                    )
-                    .child(buttons)
-                    .child(toggles)
-                    .child(menu)
-                    .child(group)
-                    .child(spinners)
-                    .child(strips),
-            )
-    }
+/// Without a menu bar `cmd-q` does not quit — a gpui app gets no menu items for
+/// free, because the standard ones come from a nib and there is no nib here.
+///
+/// The same holds for full screen: nothing is auto-inserted, so the item below
+/// carries an action this app binds itself. The menu is what makes the shortcut
+/// *discoverable*; the keymap in [`main`] is what makes it work. Naming a menu
+/// `Window` is still worth it — gpui hands that one to AppKit as the windows
+/// menu, which is what maintains the window list on it.
+fn set_menus(cx: &mut App) {
+    cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
+    cx.set_menus(vec![
+        Menu::new("bezel").items([MenuItem::action("Quit", Quit)]),
+        Menu::new("Window").items([MenuItem::action("Toggle Full Screen", ToggleFullScreen)]),
+    ]);
 }

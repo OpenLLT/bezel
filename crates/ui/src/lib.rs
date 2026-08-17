@@ -1,18 +1,31 @@
-//! bezel-ui — SwiftUI-flavored components for gpui.
+//! bezel-ui — SwiftUI-flavored components for gpui. Reached as `bezel::ui`.
 //!
 //! Style flows through the environment, never through parameters: components
-//! read [`bezel_theme::Theme`] (a gpui `Global`) at paint time, the way SwiftUI
-//! views read `@Environment`. Motion comes from the named `bezel_motion`
-//! catalog. Everything compiles against stock gpui.
+//! read [`bezel_theme::Theme`] (a gpui `Global`) at paint time, the way
+//! SwiftUI views read `@Environment`. Motion comes from the named
+//! `bezel_motion` catalog.
 
 use std::borrow::Cow;
 
 use gpui::App;
 
+pub mod combobox;
+pub mod date;
+pub mod focus;
+pub mod hover_card;
 pub mod icons;
+pub mod input;
+pub mod list;
 pub mod loaders;
 pub mod material;
+pub mod menubar;
+pub mod pagination;
+pub mod palette;
 pub mod popover;
+pub mod scroll;
+pub mod table;
+pub mod tooltip;
+pub mod tree;
 pub mod widgets;
 
 /// Embedded UI fonts — Geist and Geist Mono (variable), © Vercel Inc.,
