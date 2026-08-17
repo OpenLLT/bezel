@@ -541,11 +541,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "bezel-editor"
+version = "0.0.2"
+dependencies = [
+ "bezel-markdown",
+ "bezel-theme",
+ "gpui",
+]
+
+[[package]]
+name = "bezel-markdown"
+version = "0.0.2"
+dependencies = [
+ "bezel-theme",
+ "gpui",
+ "pulldown-cmark",
+]
+
+[[package]]
 name = "bezel-motion"
 version = "0.0.2"
 dependencies = [
  "bezel-theme",
  "gpui",
+ "web-time",
 ]
 
 [[package]]
@@ -567,6 +586,7 @@ dependencies = [
  "bezel-theme",
  "gpui",
  "unicode-segmentation",
+ "web-time",
 ]
 
 [[package]]
@@ -947,6 +967,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -1280,6 +1301,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1844,12 +1866,15 @@ dependencies = [
 name = "gallery"
 version = "0.0.2"
 dependencies = [
+ "bezel-editor",
+ "bezel-markdown",
  "bezel-motion",
  "bezel-theme",
  "bezel-ui",
  "chrono",
  "gpui",
  "gpui_platform",
+ "web-time",
 ]
 
 [[package]]
@@ -1991,6 +2016,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -2074,6 +2100,7 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "anyhow",
  "block",
@@ -2096,6 +2123,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -2129,6 +2157,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -2174,6 +2203,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -2184,6 +2214,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "console_error_panic_hook",
  "gpui",
@@ -2196,6 +2227,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "schemars",
  "serde",
@@ -2205,6 +2237,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "anyhow",
  "log",
@@ -2214,6 +2247,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -2236,6 +2270,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2264,6 +2299,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -2438,6 +2474,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -2981,9 +3018,9 @@ dependencies = [
 
 [[package]]
 name = "mac-notification-sys"
-version = "0.6.15"
+version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd604973958ddcc11b561193c0fb96ba146506ef2f231ef2e7c35fd2cbc9beca"
+checksum = "04fd0110fd05744c3c904acf1a8ca624a721d75a35638f127cd5fb6b7ccfb1bf"
 dependencies = [
  "cc",
  "log",
@@ -3034,6 +3071,7 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -3187,9 +3225,9 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "notify-rust"
-version = "4.18.0"
+version = "4.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5b4c1b4f2aa9f25f63a7a49d3dd0ed567b3670da15330a66b29434be899b891"
+checksum = "50ff2e74231b72c832d82982193b417f230945be6bdb5575b251d941d31adb00"
 dependencies = [
  "futures-lite",
  "log",
@@ -3729,6 +3767,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "collections",
  "serde",
@@ -4008,6 +4047,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags 2.13.1",
+ "memchr",
+ "unicase",
+]
+
+[[package]]
 name = "pulp"
 version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4050,6 +4100,15 @@ name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
+
+[[package]]
+name = "quick-xml"
+version = "0.37.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "quick-xml"
@@ -4320,6 +4379,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "derive_refineable",
 ]
@@ -4495,6 +4555,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "async-task",
  "backtrace",
@@ -4956,6 +5017,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "heapless",
  "log",
@@ -5152,10 +5214,11 @@ dependencies = [
 
 [[package]]
 name = "tauri-winrt-notification"
-version = "0.7.3"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed071c670382e85fc2f48ae706492d8c338f4f89bf72520d32f8abfe880aade"
+checksum = "0b1e66e07de489fe43a46678dd0b8df65e0c973909df1b60ba33874e297ba9b9"
 dependencies = [
+ "quick-xml 0.37.5",
  "thiserror 2.0.20",
  "windows 0.61.3",
  "windows-version",
@@ -5499,6 +5562,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicase"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+
+[[package]]
 name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5612,6 +5681,7 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 [[package]]
 name = "util_macros"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "perf",
  "quote",
@@ -5817,6 +5887,21 @@ dependencies = [
  "log",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "web"
+version = "0.0.2"
+dependencies = [
+ "bezel-theme",
+ "bezel-ui",
+ "console_error_panic_hook",
+ "gallery",
+ "gpui",
+ "gpui_web",
+ "log",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -6506,7 +6591,7 @@ checksum = "a6c2ad15e0e922856ee89afe862b8992334bbe7953adad56cd1199358cb30566"
 dependencies = [
  "bitflags 2.13.1",
  "libc",
- "quick-xml",
+ "quick-xml 0.41.0",
  "x11",
 ]
 
@@ -6822,6 +6907,7 @@ dependencies = [
 [[package]]
 name = "zlog"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6838,6 +6924,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "ztracing"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -6848,6 +6935,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
+source = "git+https://github.com/crabtalk/zed?rev=e0b415b4bcffe4a2f05221544a788d482f5f6f50#e0b415b4bcffe4a2f05221544a788d482f5f6f50"
 
 [[package]]
 name = "zune-core"

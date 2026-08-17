@@ -166,7 +166,7 @@ pub fn option_card(
 pub fn group_box(theme: &Theme) -> gpui::Div {
     div()
         .mt(px(24.0))
-        .rounded(px(12.0))
+        .rounded(px(Theme::SURFACE_RADIUS))
         .border_1()
         .border_color(theme.border)
         .bg(theme.card_glass_bg())
@@ -195,7 +195,7 @@ pub fn row_tile(theme: &Theme, icon_path: &'static str) -> gpui::Div {
     div()
         .flex_none()
         .size(px(36.0))
-        .rounded(px(10.0))
+        .rounded(px(Theme::PANEL_RADIUS))
         .border_1()
         .border_color(theme.border)
         .bg(ink(0.03))
@@ -460,7 +460,7 @@ pub fn select_trigger(theme: &Theme, label: impl Into<SharedString>, open: bool)
         .gap(px(8.0))
         .px(px(10.0))
         .py(px(7.0))
-        .rounded(px(8.0))
+        .rounded(px(Theme::BUTTON_RADIUS))
         .bg(theme.input_bg)
         .border_1()
         .border_color(if open { theme.caret } else { theme.border })
@@ -481,15 +481,21 @@ pub fn select_trigger(theme: &Theme, label: impl Into<SharedString>, open: bool)
 /// `self_start` because a segmented control must hug its segments: dropped into
 /// a `flex_col`, flexbox's default `align-items: stretch` would otherwise blow
 /// it out to the column's full width.
+/// The segmented track's radius, and the inset its segments come in by. Two
+/// numbers read from both here and [`toggle_group_item`], so a segment cannot
+/// stop being concentric with the track it sits in.
+const TOGGLE_GROUP_RADIUS: f32 = 9.0;
+const TOGGLE_GROUP_PAD: f32 = 2.0;
+
 pub fn toggle_group(theme: &Theme) -> gpui::Div {
     div()
         .self_start()
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(2.0))
-        .p(px(2.0))
-        .rounded(px(9.0))
+        .gap(px(TOGGLE_GROUP_PAD))
+        .p(px(TOGGLE_GROUP_PAD))
+        .rounded(px(TOGGLE_GROUP_RADIUS))
         .bg(ink(0.06))
         .border_1()
         .border_color(theme.border)
@@ -505,7 +511,11 @@ pub fn toggle_group_item(
     let mut item = div()
         .px(px(10.0))
         .py(px(4.0))
-        .rounded(px(7.0))
+        // Concentric with the track: 9 - 2 = 7.
+        .rounded(px(Theme::inset_radius(
+            TOGGLE_GROUP_RADIUS,
+            TOGGLE_GROUP_PAD,
+        )))
         .border_1()
         .border_color(RING_SLOT)
         .text_size(px(12.5))
@@ -551,7 +561,7 @@ pub fn collapsible_header(
         .gap(px(6.0))
         .px(px(4.0))
         .py(px(5.0))
-        .rounded(px(6.0))
+        .rounded(px(Theme::CONTROL_RADIUS))
         .cursor_pointer()
         .hover(|s| s.bg(ink(0.03)))
         .child(disclosure(theme, expanded))
@@ -562,6 +572,162 @@ pub fn collapsible_header(
                 .text_color(theme.text)
                 .child(label.into()),
         )
+}
+
+/// A flag that follows something else until the user takes it over.
+///
+/// The rule behind a section that opens itself while work streams in and
+/// collapses when it stops: auto-follow is right until the first press, and
+/// wrong immediately after — whatever the flag does next, the person who
+/// clicked has to win. Nothing agent-shaped about it; a build log that unfolds
+/// while it runs and a detail pane that follows the selection both want this.
+///
+/// It is an `Option<bool>` rather than the two flags it reads as (*touched*,
+/// plus the value): "untouched, and here is the manual value" is a state that
+/// cannot mean anything, and this way it cannot be written.
+///
+/// ```ignore
+/// let open = self.details.get(self.running);           // paint this
+/// // …on the header's click:
+/// self.details.toggle(self.running);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Takeover(Option<bool>);
+
+impl Takeover {
+    /// What to show: `auto` until the first [`Self::toggle`], the user's own
+    /// choice from then on.
+    pub fn get(self, auto: bool) -> bool {
+        self.0.unwrap_or(auto)
+    }
+
+    /// Flip what is currently on screen — which while nobody has touched it is
+    /// `auto`, *not* the stored value — and take over from here.
+    pub fn toggle(&mut self, auto: bool) {
+        self.0 = Some(!self.get(auto));
+    }
+}
+
+/// Padding inside a [`step_row`] and the [`step_output`] under it — the two
+/// have to agree or the output's first character sits left of the title.
+const STEP_PAD_X: f32 = 10.0;
+const STEP_PAD_Y: f32 = 6.0;
+/// How tall an output may get before it scrolls (`ToolCard.svelte`'s
+/// `max-h-64`).
+const STEP_OUTPUT_MAX: f32 = 256.0;
+
+/// One operation, as a row: an icon, what it was, and how it went.
+///
+/// A tool call in a transcript, a step in a CI run, a file in a migration — the
+/// shape is the same everywhere, which is why this takes strings and not a type
+/// that knows what any of them mean. `detail` is the truncating middle (a
+/// query, a path, a `· 3` count), `meta` the right-aligned figure that never
+/// truncates (a duration, a size, a row count).
+///
+/// `expanded` is `None` when there is nothing under the row, and the chevron is
+/// simply absent — a disclosure that opens onto nothing is worse than no
+/// disclosure. `Some` renders it, and the caller owns the flag.
+///
+/// Returns a plain `Div` like the rest of this module: the caller adds `.id(..)`
+/// and `.on_click(..)` **to this row**, never to a wrapper around it, or the
+/// hitbox ends up narrower than what it paints.
+pub fn step_row(
+    theme: &Theme,
+    icon: &'static str,
+    title: impl Into<SharedString>,
+    detail: Option<SharedString>,
+    meta: Option<SharedString>,
+    failed: bool,
+    expanded: Option<bool>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .px(px(STEP_PAD_X))
+        .py(px(STEP_PAD_Y))
+        .cursor_pointer()
+        .hover(|s| s.bg(ink(0.03)))
+        .child(
+            // Tinted here rather than on the row: gpui reads an svg's colour
+            // off its own style, so a colour set on the parent never arrives.
+            crate::icons::icon(icon)
+                .size(px(14.0))
+                .text_color(if failed {
+                    theme.danger
+                } else {
+                    theme.text_muted
+                }),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(12.5))
+                .text_color(theme.text)
+                .child(title.into()),
+        )
+        .when_some(detail, |row, detail| {
+            row.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(12.0))
+                    .text_color(theme.text_muted)
+                    .child(detail),
+            )
+        })
+        .child(
+            div()
+                .ml_auto()
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .when_some(meta, |cluster, meta| {
+                    cluster.child(
+                        div()
+                            .font_family(theme.font_mono.clone())
+                            .text_size(px(12.0))
+                            .text_color(theme.text_muted)
+                            .child(meta),
+                    )
+                })
+                .when_some(expanded, |cluster, expanded| {
+                    cluster.child(disclosure(theme, expanded))
+                }),
+        )
+}
+
+/// What a [`step_row`] opens onto: its output, verbatim.
+///
+/// Monospaced and capped, because the thing being shown is a program's stdout
+/// and the row it hangs off is one line tall — a 900-line stack trace pushing
+/// the next step off screen is the failure this cap exists for. Past the cap it
+/// scrolls, which is why it takes an id.
+///
+/// No scrollbar: the wheel reaches it regardless, and a bar would need a
+/// `ScrollHandle` and a `ScrollbarState` from every caller for a box that is
+/// usually four lines long. Wrap it in `div().relative()` with
+/// [`crate::scroll::scrollbar`] over it if a particular one earns the bar.
+pub fn step_output(
+    theme: &Theme,
+    id: impl Into<gpui::ElementId>,
+    text: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .max_h(px(STEP_OUTPUT_MAX))
+        .overflow_y_scroll()
+        .border_t_1()
+        .border_color(theme.border)
+        .px(px(STEP_PAD_X))
+        .py(px(STEP_PAD_Y))
+        .font_family(theme.font_mono.clone())
+        .text_size(px(12.0))
+        .text_color(theme.text_muted)
+        .child(text.into())
 }
 
 // ---------------------------------------------------------------------------
@@ -652,7 +818,7 @@ pub fn tag(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
         .pl(px(8.0))
         .pr(px(5.0))
         .py(px(3.0))
-        .rounded(px(6.0))
+        .rounded(px(Theme::CONTROL_RADIUS))
         .bg(ink(0.07))
         .border_1()
         .border_color(theme.border)
@@ -760,7 +926,7 @@ pub fn tab(theme: &Theme, label: impl Into<SharedString>, active: bool) -> gpui:
         .px(px(10.0))
         .pb(px(7.0))
         .pt(px(6.0))
-        .rounded_t(px(6.0))
+        .rounded_t(px(Theme::CONTROL_RADIUS))
         .border_1()
         .border_color(RING_SLOT)
         .text_size(px(13.0))
@@ -798,7 +964,7 @@ pub fn ghost_action(theme: &Theme) -> gpui::Div {
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .rounded(px(8.0))
+        .rounded(px(Theme::BUTTON_RADIUS))
         .px(px(10.0))
         .py(px(6.0))
         .text_size(px(12.0))
@@ -822,7 +988,7 @@ pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div
         .mt(px(16.0))
         .px(px(16.0))
         .py(px(12.0))
-        .rounded(px(12.0))
+        .rounded(px(Theme::SURFACE_RADIUS))
         .border_1()
         .border_color(red.opacity(0.2))
         .bg(red.opacity(0.06))
@@ -852,7 +1018,7 @@ pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::D
         .mt(px(8.0))
         .px(px(16.0))
         .py(px(10.0))
-        .rounded(px(12.0))
+        .rounded(px(Theme::SURFACE_RADIUS))
         .border_1()
         .border_color(amber.opacity(0.2))
         .bg(amber.opacity(0.06))
@@ -918,6 +1084,42 @@ mod tests {
             axis_fraction(point(px(0.0), px(0.0)), bounds, Axis::Horizontal, 4.0),
             0.5
         );
+    }
+
+    #[test]
+    fn a_takeover_follows_the_flag_until_it_is_touched() {
+        let mut open = Takeover::default();
+        assert!(!open.get(false));
+        assert!(open.get(true), "the flag turning on opens it");
+        // Touched while open: closed, and the flag is no longer consulted.
+        open.toggle(true);
+        assert!(!open.get(true));
+        assert!(!open.get(false));
+    }
+
+    #[test]
+    fn the_first_press_flips_what_was_on_screen() {
+        // The one thing easy to get backwards: with nothing stored yet, the
+        // press flips `auto`, not the default. A header that shows "open"
+        // because the work is streaming has to *close* on its first click —
+        // flipping the stored `false` would open what is already open.
+        let mut auto_open = Takeover::default();
+        auto_open.toggle(true);
+        assert!(!auto_open.get(true));
+
+        let mut auto_closed = Takeover::default();
+        auto_closed.toggle(false);
+        assert!(auto_closed.get(false));
+    }
+
+    #[test]
+    fn a_manual_choice_outlasts_the_run_that_set_it() {
+        // Opened by hand while nothing was running; the run starting and
+        // finishing must not close it again.
+        let mut open = Takeover::default();
+        open.toggle(false);
+        assert!(open.get(true));
+        assert!(open.get(false));
     }
 
     #[test]

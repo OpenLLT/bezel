@@ -108,6 +108,36 @@ read off a temporary probe rather than assumed — and still unseen:
 - [ ] The thumb tracking a 10,000-row document, which is the same bar over a
       handle it has never been pointed at before
 
+The control bar and the music pattern were built against the running app, captured
+window by window — the layout below is *seen*, on dark, at one window size:
+
+- [x] Both centring claims, measured off the capture rather than assumed: the
+      bar centred in its frame, and the centre block centred in the bar under a
+      five-against-one cluster split
+- [x] The blur following the stadium's corners (the striped band on the Control
+      bar page is there for exactly this, and nothing else shows it)
+- [x] Transport icons painting at the same weight as their neighbours
+
+Everything you *do* to it is unrun — no pointer ever reached the built app:
+
+- [ ] Play advancing the position, and the window going quiet again on pause
+- [ ] Dragging the scrubber mid-playback and the thumb NOT snapping back, which
+      is the whole reason `MusicPlayer::scrub` exists
+- [ ] The release committing the seek — `on_mouse_up` is the only commit path,
+      since gpui delivers no drag-end
+- [ ] Right-click on a track opening the track menu rather than the gallery's
+      own, which rests entirely on one `cx.stop_propagation()`
+- [ ] Liking a track without also playing it — the same, one level down
+- [ ] Light appearance, and glass off. The radius bug shows only on glass and
+      only at the corners, so dark-only is half a check
+
+Click-away dismissal, reported from the running app and fixed on 2026-08-18 —
+verified by hand, which is the only way any of this ever gets verified:
+
+- [x] A dialog closing on a press outside its card
+- [x] The context menu closing on a press off the card
+- [x] The command palette closing on a scrim press as well as `escape`
+
 The paginator's window is six tests deep; the row it draws is not:
 
 - [ ] Clicking a page, and the prev/next steps going inert at the ends rather
@@ -150,7 +180,37 @@ unbuilt component gets declared with, not because anything needs them today.
 
 Heavy extractions from comet (ports, not new design):
 
-- [ ] `bezel-markdown` — streaming, block-incremental renderer
+- [x] `bezel-markdown` phase 1 — the document model (`doc`/`parse`/`serialize`).
+      Flat Notion-style blocks, marks over byte ranges, fixed-point round trip.
+- [x] `bezel-markdown` phase 2 — rendering. Every block kind paints, inline
+      marks shape into runs, code blocks carry a self-contained copy button, and
+      tables measure content-proportional columns. Shown by the Document
+      pattern (Patterns → Media), not by a Components row: `COMPONENTS` is
+      `crates/ui` and markdown is its own crate.
+- [ ] Text selection across the rendered tree. comet resolves it through a
+      per-element registry with a snapshotted `String` per span; ours should
+      resolve to *source* byte ranges instead (zed's model), which is what makes
+      "copy what I selected" return well-formed markdown rather than joined
+      display text. Needs a source range on `InlineRun`-equivalent marks.
+- [ ] Streaming: the per-chunk opacity veil and hanging-marker mend. Both exist
+      in comet but sit on its incremental parser, so they are a re-derivation
+      against `parse`, not a port. Wanted by desktop's transcript.
+- [ ] Syntax highlighting in code blocks. Needs `HighlightKind` in `bezel-theme`
+      (restoring `SyntaxPalette::color`) so spans arrive from the caller and this
+      crate never learns about tree-sitter. Deliberately not added before
+      `bezel-syntax` exists to produce them.
+- [x] `bezel-markdown` phase 3a — the editing model (`edit`). Marks mapped
+      through insert/remove/toggle, block split/merge/indent/outdent, markdown
+      input shortcuts. Pure, and held to the round trip over 1.5M generated edit
+      sequences.
+- [x] `bezel-editor` phase 3b (first cut) — the editing surface. `Editor` owns
+      the document and a `(block, offset)` caret; typing, Backspace, Enter, Tab
+      and arrows run through the phase-3a operations; markdown input shortcuts
+      fire as you type. On the Document pattern's Edit segment.
+- [ ] Editing still missing: selection (the caret is a point, not a range), so
+      no copy, cut or select-all; undo; the slash menu; and `up`/`down` step
+      whole blocks rather than visual rows, so they jump in a wrapped
+      paragraph. Word motion and the clipboard come with selection.
 - [ ] `bezel-syntax` — tree-sitter highlighting + bounded highlight cache
 - [ ] `bezel-terminal` — alacritty grid view (leave the app-coupled panel behind)
 
@@ -202,18 +262,187 @@ weights, the sizes actually in use) · layout constants drawn at size · the
 bezier curves and the whole motion catalog, plotted from their own pure
 functions · materials · all 58 icons.
 
-A third tab, Patterns — composed examples rather than primitives, shadcn's
-"blocks" — is the obvious next one, once there are compositions worth porting
-out of comet.
+A third tab, **Patterns** — composed screens rather than primitives, shadcn's
+"blocks". Its rows point at `apps/gallery/src/patterns/`, not into `crates/`,
+which is the point: a pattern is not a component you call, it is a file you
+copy. `Tab::full_bleed` gives those pages the whole pane instead of the fixed
+column every component demo is designed for.
+
+Rows are grouped by the kind of app they come from. **Media** holds the music
+player; **Agent** holds the activity zone of an agent turn, composed out of
+`scroll::follow` and `widgets::Takeover`, and the tab opens on it. A group earns
+a row when the parts under it are real, which is why there is no composer or
+transcript page yet.
+
+A pattern is an **entity**, not a handful of fields on the gallery, and that is
+the rule for every one after this. The music player first landed as thirteen
+`music_*` fields on `Gallery` plus a mount in the root render — the same bloat
+the library is careful to keep out of `ui`, aimed one layer off. A component
+demo owns a value or two and can keep them beside the rest; a screen owns a
+screen's worth. `Gallery` holds one `Entity<MusicPlayer>`, and the next pattern
+costs one more field rather than another fifteen.
+
+Two things fell out of that rather than being designed. The page mounts its own
+context menu (`menu_at` anchors to the window, so a nested view can carry a
+popup), and the playback clock stops asking for frames when another page is
+open — a view that is not rendered never reaches its `request_animation_frame`,
+which the root-level version could not manage.
+
+Its first entry is **Music player**, and it exists because someone building a
+native Spotify client on gpui asked what bezel had for one. Answering that by
+composing the screen is what found the gaps: no transport icons at all (58 of
+them, none a play button), and no floating bar to put them in. Both are now
+library code; nothing else from the page needed to be. The clock is derived
+from the wall clock rather than accumulated per frame, and the scrubber's
+displayed position detaches from it while held — otherwise a playing track
+drags the thumb out from under the pointer, which reads as a seek bar that
+fights you.
+
+The orbs (`loaders::orb`) — four shapes over one period, and **the first
+loaders in this library that are bezel's own.** The three older ones are all
+grids of cells: a pulse row, a 3×3 matrix, a 2×3 mini. Three variations on one
+arrangement is a narrow vocabulary for the surface a library gets looked at
+through, and `phase.rs` had already made the point itself — *a loading
+indicator is a brand surface.*
+
+`Cluster` swings its orbs between 0.14 and 0.62 of the box, a third of a period
+apart, so one is always swelling while another shrinks and the count you
+perceive changes; a fixed size would leave the silhouette constant and the
+thing would read as three dots dimming. `Ring` chases brightness round a
+circle. `Converge` gathers those dots to a single point and opens back out —
+one radius shared by every dot, so they arrive together. `Bloom` sends rings
+out from the centre, fading before the rim.
+
+Everything is circles, because circles are the whole vocabulary gpui gives at
+the pinned rev: no rotation transform, no conic gradient, and no blur filter on
+an element (`material`'s backdrop blur blurs what is *behind* a surface and
+cannot soften the surface itself). So the glow is a `BoxShadow`, the ring is
+eight positioned dots rather than a swept arc, and every position is
+arithmetic.
+
+That arithmetic is pure and lives in `bezel_motion::phase`, tested there: the
+opacity floor that stops the cluster blinking, the drift that closes its circle
+so nothing accumulates, the ring dots actually sitting on their circle, a bloom
+ring being invisible before the rim (or the box would clip it square), and a
+compile-time assertion that the cluster's size swing stays at least 4× — below
+that it silently becomes three dots dimming again. One tint, from
+`theme.accent`; in three hues this would be the gradient spinner wearing a
+different shape.
+
+Click-away dismissal (`popover.rs`). Reported as "dialogs and menus only close
+when you click an item", and it was two different faults wearing one symptom.
+
+The library's contract is stated on `anchored_menu`: *"dismissal is the caller's
+`.on_mouse_down_out` on the content."* Three components that own their popup —
+combobox, menubar, date picker — honour it. So did the gallery's select. The
+gallery's **context menu** simply forgot, which is a caller bug and a one-line
+fix.
+
+`modal` was not a caller bug. Its scrim lives inside its own `deferred` layer,
+so *nothing outside can reach it* — meaning no caller could dismiss a dialog by
+clicking away, ever. The sibling `sheet` had already hit this exact wall and
+solved it with an `on_dismiss` parameter, and says so in its own doc; `modal`
+never got one. The library knew the rule and had not applied it next door, which
+is the same shape as the radius/blur split above.
+
+`modal` now takes `on_dismiss` too. It lands on the *card's wrapper* as
+`on_mouse_down_out` rather than as a click on the scrim, so a press inside the
+card is not "out" and the dialog's own buttons keep working — no occluding
+overlay, no propagation games. The palette got the same treatment from the
+gallery side: it bound `escape` and nothing else, and a scrim you can press with
+no effect reads as a stuck window.
+
+Corner radii, bound and derived. The crate painted **nine** distinct radii
+across thirty sites; three had names. It now paints **three** literals across
+seven, and the reason is not tidiness.
+
+`material` takes a corner radius and paints the backdrop blur to it, so a glass
+surface states its radius twice — once on its border, once under it. Those two
+had drifted apart into separate literals: `popover_card` wrote `12.0` and
+`material_menu` wrote `12.0` sixty lines away in a different function, the
+palette wrote a third, and `modal_glass` took a fourth as a **parameter** whose
+doc read *"must match the card's rounding"* — the footgun handed to the caller
+in writing. Nothing enforced any of it, and a mismatch shows only on glass and
+only at the corners. `Theme::SURFACE_RADIUS` is now read at both ends, and
+`modal_glass` lost the parameter (it had no callers at all, which is worth
+knowing separately).
+
+The rest came from asking what SwiftUI's standard is, and finding it isn't a
+scale. SwiftUI has no radius tokens: it has `ContainerRelativeShape`,
+`.containerShape()` and `ConcentricRectangle`, and the rule is that a child's
+radius is its container's *minus the inset*. Checked against this tree, the rule
+was already here and unnamed — `popover_card` is 12 with a 4px inset, and **8.0
+was the crate's most-repeated corner value**. It was never a token; it was
+arithmetic nobody had written down. `Theme::inset_radius` writes it down, and
+four sites now derive rather than declare: `menu_row`, `search_input_frame`,
+`menubar`'s disabled row, and `toggle_group_item` (a track of 9 inset by 2 —
+the second concentric pair, found the same way).
+
+gpui has no continuous corners (`grep -rn "continuous\|squircle\|superellipse"`
+over its source finds nothing relevant), so the squircle half of Apple's answer
+is off the table without a renderer change on the fork.
+
+Only one value was left worth naming: 8.0 at the eight sites that genuinely
+*chose* it — buttons, text fields, select triggers — now `BUTTON_RADIUS`, a
+size up from `CONTROL_RADIUS`'s chips and tags. What remains literal is 7.0 ×3
+(paginator buttons, calendar cells), 5.0 ×2 (key caps) and 4.0 ×2 (checkbox,
+slider): small, standalone, and concentric with nothing. Naming them would be
+inventing a taxonomy rather than recording one.
+
+No trait. The card "types" are `fn(&Theme) -> Div`, not types, and no call site
+is polymorphic — nothing holds a `Box<dyn Card>` or is generic over one. What
+they share is a number and an invariant, which is a value and a `const fn`.
+
+Control bar (`control_bar.rs`) — a glass surface holding a leading cluster, an
+optional centre and a trailing cluster. Named for the job, not the shape, and
+the module is the evidence: of everything it does, only one line was ever
+stadium-specific. The glass chrome, the equal rails, the overlay placement and
+the invariant below are all shape-blind, so `Shape::Pill`/`Shape::Rounded` is a
+choice between two corner cuts and nothing else — a stadium for a transport, a
+`Theme::BUBBLE_RADIUS` rectangle for a composer, which is not a media control
+and should not read as one.
+
+`material` takes a corner radius and paints the backdrop blur to it, and a
+mismatch frosts square corners outside a round border. The invariant is *the
+blur radius equals the border radius* — not "half the height", which is only
+the stadium's case of it. One number comes out of `Shape` and feeds both, so a
+second shape cannot reintroduce the bug.
+
+What is deliberately **not** a shape here is Spotify's bar. That one docks: it
+reflows the content above it, takes no blur and does not float. It is the
+negation of this module's whole reason to exist, and it is `div().h(..)
+.border_t_1()` — nothing to extract.
+
+The centre is centred on the *bar*, not on what the clusters leave: the two
+rails are equal-flex and the centre is not, so five controls on the left and
+one on the right still put it on axis. That rule is also why the bar takes the
+width it is given rather than hugging its controls — equal rails need free
+space to be equal about, and a shrink-to-fit bar has none. The two are
+contradictory and only one of them can be free; width is the caller's, and a
+`max_w` is what keeps a wide window showing a floating bar rather than a docked one.
+
+`bar_button` builds its own icon rather than taking one, the way `row_tile`
+does, and for a reason worth knowing anywhere in this library: **gpui reads an
+svg's colour off that element's own style and paints nothing at all when it is
+unset.** A colour set on the button would silently not reach the glyph, and the
+failure looks like an empty circle rather than an error. That was found by
+building the gallery page, not by reading the code.
+
+Media transport icons — play/pause (linear and bold), skip, shuffle, repeat,
+repeat-one, heart, playlist, microphone, and volume mute/low. The three volume
+glyphs are one Solar family on purpose: a level control swaps between them as
+you slide, and a cone that changed shape mid-slide would read as a bug. That
+also replaced the hand-drawn `volume-loud`, which was hand-drawn only because
+the locally embedded subset had no speaker at the time — Solar does.
 
 Components: button ×3 · text field (IME, selection, clipboard, native
 shortcuts) · **textarea** · select · combobox · command palette · date picker ·
 menubar · checkbox · radio · toggle ·
-badge ×2 · avatar · progress · slider · tabs · toggle group · disclosure +
-collapsible header · breadcrumb · tag · status dot · empty state · tooltip ·
+badge ×2 · avatar · progress · slider · tabs · toggle group · control bar · follow scroll · disclosure +
+collapsible header + takeover · breadcrumb · tag · status dot · empty state · tooltip ·
 hover card · context menu · popover/menu/dialog/sheet mounts · resizable
-split · scroll area · table · tree view · virtualized list · pagination · group box + rows · separator · skeleton rows · alert strips ·
-spinners · icons (58 SVG) · material glass.
+split · scroll area · table · tree view · diff · virtualized list · pagination · group box + rows · separator · skeleton rows · alert strips ·
+orbs ×4 + spinners · icons (58 SVG) · material glass.
 
 Textarea is one `TextField` under a `Shape`, not a second component: `Line`,
 `Rows(n)`, `Grow { min, max }`. Every action already worked on the content and

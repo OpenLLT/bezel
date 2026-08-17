@@ -13,6 +13,7 @@ use std::rc::Rc;
 use bezel_theme::Theme;
 use bezel_theme::appearance::{self, AppearanceMode};
 use bezel_ui::combobox::Combobox;
+use bezel_ui::control_bar::Shape as ControlBarShape;
 use bezel_ui::date::{Calendar, Date};
 use bezel_ui::hover_card::HoverCard;
 use bezel_ui::input::{Shape, TextField};
@@ -37,6 +38,8 @@ actions!(gallery, [OpenPalette, ToggleInspector, ToggleFullScreen]);
 /// have no such window method, so the whole surface is debug-only.
 #[cfg(debug_assertions)]
 pub mod inspector;
+
+pub mod patterns;
 
 pub const LANGUAGES: [&str; 8] = [
     "Rust",
@@ -190,6 +193,53 @@ const TABLE_ROWS: [(&str, &str, u32); 7] = [
     ("notes.md", "Document", 1_130),
 ];
 
+/// One row on the Step row page. A build rather than an agent turn, on purpose:
+/// the component is named for the shape, and the shape is "an operation with an
+/// outcome" wherever it turns up.
+struct Step {
+    icon: &'static str,
+    title: &'static str,
+    detail: &'static str,
+    meta: &'static str,
+    failed: bool,
+    /// `None` is a step that printed nothing, which is what suppresses the
+    /// chevron.
+    output: Option<&'static str>,
+}
+
+const STEPS: [Step; 3] = [
+    Step {
+        icon: icons::TERMINAL,
+        title: "cargo test",
+        detail: "-p bezel-ui",
+        meta: "1.4s",
+        failed: false,
+        output: Some(
+            "running 87 tests\n\
+             test widgets::tests::the_first_press_flips_what_was_on_screen ... ok\n\
+             test scroll::tests::following_means_within_slack_of_the_end ... ok\n\
+             \n\
+             test result: ok. 87 passed; 0 failed",
+        ),
+    },
+    Step {
+        icon: icons::MAGNIFER,
+        title: "Search",
+        detail: "fn at_bottom",
+        meta: "12ms",
+        failed: false,
+        output: None,
+    },
+    Step {
+        icon: icons::DOCUMENT,
+        title: "Read",
+        detail: "crates/ui/src/missing.rs",
+        meta: "3ms",
+        failed: true,
+        output: Some("error: no such file or directory (os error 2)"),
+    },
+];
+
 /// The menubar page's menus. Ordinary app chrome, with the two rows worth
 /// showing: a separator, and a disabled item the keyboard steps straight over.
 ///
@@ -277,21 +327,83 @@ pub struct Tab {
     pub groups: &'static [Group],
     /// The page the tab opens on.
     pub home: &'static str,
+    /// Whether its pages get the whole pane instead of the fixed column every
+    /// component demo is designed for. A pattern is a screen: it fills the
+    /// pane, scrolls its own parts, and floats its own chrome over them.
+    pub full_bleed: bool,
 }
 
-/// The top nav. Two tabs, not shadcn's eight: the axis separates the *kind* of
-/// thing you are looking at, and bezel has two kinds until composed patterns
-/// exist to fill a third.
+/// The top nav. The axis is the *kind* of thing you are looking at: a token, a
+/// component, or a screen built out of both.
 pub const TABS: &[Tab] = &[
     Tab {
         title: "Foundations",
         groups: FOUNDATIONS,
         home: "color",
+        full_bleed: false,
     },
     Tab {
         title: "Components",
         groups: COMPONENTS,
         home: "buttons",
+        full_bleed: false,
+    },
+    Tab {
+        title: "Patterns",
+        groups: PATTERNS,
+        home: "agent-activity",
+        full_bleed: true,
+    },
+];
+
+/// Composed screens. The source path points at the gallery rather than into
+/// `crates/`, and that is the point — a pattern is not a component you call, it
+/// is a file you copy.
+pub const PATTERNS: &[Group] = &[
+    // A group per kind of app, and this one is the driver: bezel is a UI
+    // library for agent apps. A page appears here when the parts under it are
+    // real — the composer, the tool calls and the transcript are named in
+    // `TODO.md`, and none of them is a row until it can be pressed.
+    Group {
+        title: "Agent",
+        sections: &[
+            section(
+                "agent-activity",
+                "Activity",
+                "apps/gallery/src/patterns/agent.rs",
+            ),
+            section(
+                "agent-tools",
+                "Tool calls",
+                "apps/gallery/src/patterns/agent.rs",
+            ),
+            section(
+                "agent-composer",
+                "Composer",
+                "apps/gallery/src/patterns/agent.rs",
+            ),
+            section(
+                "agent-transcript",
+                "Transcript",
+                "apps/gallery/src/patterns/transcript.rs",
+            ),
+            section("agent-diff", "Diff", "apps/gallery/src/patterns/diff.rs"),
+        ],
+    },
+    Group {
+        title: "Media",
+        sections: &[
+            section(
+                "document",
+                "Document",
+                "apps/gallery/src/patterns/document.rs",
+            ),
+            section(
+                "music-player",
+                "Music player",
+                "apps/gallery/src/patterns/music.rs",
+            ),
+        ],
     },
 ];
 
@@ -372,6 +484,7 @@ pub const COMPONENTS: &[Group] = &[
             section("tabs", "Tabs", "crates/ui/src/widgets.rs"),
             section("collapsible", "Collapsible", "crates/ui/src/widgets.rs"),
             section("split", "Resizable split", "crates/ui/src/widgets.rs"),
+            section("control-bar", "Control bar", "crates/ui/src/control_bar.rs"),
         ],
     },
     // Nothing here is built. It is one whole group on purpose: the data
@@ -380,6 +493,7 @@ pub const COMPONENTS: &[Group] = &[
         title: "Data",
         sections: &[
             section("scroll-area", "Scroll area", "crates/ui/src/scroll.rs"),
+            section("follow", "Follow scroll", "crates/ui/src/scroll.rs"),
             section("table", "Table", "crates/ui/src/table.rs"),
             section("tree", "Tree view", "crates/ui/src/tree.rs"),
             section("virtual-list", "Virtualized list", "crates/ui/src/list.rs"),
@@ -403,6 +517,7 @@ pub const COMPONENTS: &[Group] = &[
             section("progress", "Progress", "crates/ui/src/widgets.rs"),
             section("status-dot", "Status dot", "crates/ui/src/widgets.rs"),
             section("alerts", "Alert strips", "crates/ui/src/widgets.rs"),
+            section("step-row", "Step row", "crates/ui/src/widgets.rs"),
             section("loaders", "Loaders", "crates/ui/src/loaders.rs"),
         ],
     },
@@ -421,6 +536,16 @@ fn section_at(key: &str) -> Option<&'static Section> {
         .find(|section| section.key == key)
 }
 
+/// Which tab holds a key, so an embed can select a page without knowing the
+/// shape of the catalog above it.
+fn tab_of(key: &str) -> Option<usize> {
+    TABS.iter().position(|tab| {
+        tab.groups
+            .iter()
+            .any(|group| group.sections.iter().any(|section| section.key == key))
+    })
+}
+
 pub struct Gallery {
     search: Entity<TextField>,
     filled: Entity<TextField>,
@@ -433,6 +558,12 @@ pub struct Gallery {
     last_command: Option<SharedString>,
     segment: usize,
     expanded: bool,
+    /// Which step rows are showing their output.
+    step_open: [bool; 3],
+    /// The second collapsible: a section that follows a run until you take it
+    /// over. `running` is what a streaming flag would be in a real app.
+    running: bool,
+    details: widgets::Takeover,
     /// Right-click menu, anchored at the click position.
     context_menu: popover::Popup<gpui::Point<gpui::Pixels>>,
     /// Select state lives here, not in a component: the menu is mounted by
@@ -485,6 +616,11 @@ pub struct Gallery {
     pane_bar: ScrollbarState,
     demo_scroll: gpui::ScrollHandle,
     demo_bar: ScrollbarState,
+    /// The follow-scroll demo: a log that grows under a view pinned to its end.
+    log_scroll: gpui::ScrollHandle,
+    log_bar: ScrollbarState,
+    log_follow: scroll::FollowState,
+    log_lines: usize,
     table_scroll: gpui::ScrollHandle,
     table_bar: ScrollbarState,
     tree_scroll: gpui::ScrollHandle,
@@ -508,12 +644,26 @@ pub struct Gallery {
     /// Which column the table page is sorted by. The app's, because the app is
     /// what has to sort the rows — the table only says what a click meant.
     table_sort: Option<Sort>,
+    /// The music pattern — one field, because a pattern is a screen and owns a
+    /// screen's worth of state. A component demo can keep its value or two up
+    /// here beside the rest; thirteen of them cannot.
+    activity: Entity<patterns::agent::Activity>,
+    tool_calls: Entity<patterns::agent::ToolCalls>,
+    agent_composer: Entity<patterns::agent::Composer>,
+    transcript: Entity<patterns::transcript::Transcript>,
+    diff: Entity<patterns::diff::Diff>,
+    music: Entity<patterns::music::MusicPlayer>,
+    document: Entity<patterns::document::Document>,
     /// Which top-nav tab is open.
     tab: usize,
     /// Where you were in each tab — switching away and back should land you
     /// where you left, not at the top.
     selected: Vec<&'static str>,
     dialog: popover::Popup<()>,
+    /// Renders one section alone, without the nav, rail or header around it.
+    /// The website embeds a page per component this way, so a doc page shows
+    /// the component it documents rather than the whole browser.
+    embedded: bool,
 }
 
 impl Gallery {
@@ -568,6 +718,10 @@ impl Gallery {
             last_command: None,
             segment: 0,
             expanded: true,
+            step_open: [false; 3],
+            // Arrives mid-run, which is the state the auto-follow is for.
+            running: true,
+            details: widgets::Takeover::default(),
             context_menu: popover::Popup::default(),
             sheet: popover::Popup::default(),
             split: 0.4,
@@ -586,6 +740,12 @@ impl Gallery {
             pane_bar: ScrollbarState::new(),
             demo_scroll: gpui::ScrollHandle::new(),
             demo_bar: ScrollbarState::new(),
+            log_scroll: gpui::ScrollHandle::new(),
+            log_bar: ScrollbarState::new(),
+            log_follow: scroll::FollowState::new(),
+            // Enough to overflow the box on arrival, so the pin has something
+            // to hold onto before you press anything.
+            log_lines: 24,
             table_scroll: gpui::ScrollHandle::new(),
             table_bar: ScrollbarState::new(),
             table_sort: None,
@@ -610,10 +770,35 @@ impl Gallery {
             switched: [true, false],
             level: 0.5,
             tab_choice: 0,
-            tab: 1,
-            selected: TABS.iter().map(|tab| tab.home).collect(),
+            tab: 2,
+            selected: TABS
+                .iter()
+                .enumerate()
+                .map(|(i, tab)| if i == 2 { "agent-diff" } else { tab.home })
+                .collect(),
             dialog: popover::Popup::default(),
+            activity: cx.new(|_| patterns::agent::Activity::default()),
+            tool_calls: cx.new(|_| patterns::agent::ToolCalls::default()),
+            agent_composer: cx.new(patterns::agent::Composer::new),
+            transcript: cx.new(|_| patterns::transcript::Transcript::default()),
+            diff: cx.new(|_| patterns::diff::Diff),
+            music: cx.new(|_| patterns::music::MusicPlayer::default()),
+            document: cx.new(patterns::document::Document::new),
+            embedded: false,
         }
+    }
+
+    /// One section, alone, for a website page that documents it. Falls back to
+    /// the whole browser when the key is not in the catalog, so a stale link
+    /// lands somewhere useful instead of on an empty pane.
+    pub fn embedded(key: &str, cx: &mut Context<Self>) -> Self {
+        let mut gallery = Self::new(cx);
+        if let Some(tab) = tab_of(key) {
+            gallery.tab = tab;
+            gallery.selected[tab] = section_at(key).expect("tab_of matched").key;
+            gallery.embedded = true;
+        }
+        gallery
     }
 
     /// The gallery's own focus handle — what the window focuses on launch.
@@ -849,7 +1034,7 @@ impl Gallery {
     /// in [`Self::header`].
     fn nav(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let current = self.tab;
-        let mode = appearance::mode(cx);
+        let dark = matches!(theme.appearance, bezel_theme::Appearance::Dark);
         div()
             .flex_none()
             .h(px(Theme::HEADER_HEIGHT))
@@ -890,23 +1075,47 @@ impl Gallery {
             }))
             // Pushes the appearance switch to the trailing edge.
             .child(div().flex_1())
+            // A switch, not three segments. It reads the *resolved* appearance
+            // rather than the mode, so it shows what you are actually looking
+            // at while the app is still following the OS — and the first flip
+            // is what pins it. Returning to `System` is `set_mode`, which is a
+            // settings-level action rather than a nav-level one.
             .child(
-                widgets::toggle_group(theme).children(AppearanceMode::ALL.into_iter().map(
-                    |option| {
-                        div()
-                            .id(SharedString::from(format!("appearance-{}", option.label())))
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(icons::icon(icons::SUN).size(px(14.0)).text_color(if dark {
+                        theme.text_faint
+                    } else {
+                        theme.text
+                    }))
+                    // id + click on the switch itself, not on a wrapper around
+                    // it: a `div().id(..)` wrapped around a control takes
+                    // clicks over a box narrower than what it paints, which is
+                    // the open hit-testing bug in this tree.
+                    .child(
+                        widgets::toggle(theme, dark)
+                            .id("appearance")
+                            .cursor_pointer()
                             .on_click(cx.listener(move |_, _, _, cx| {
-                                appearance::set_mode(option, cx);
+                                appearance::set_mode(
+                                    if dark {
+                                        AppearanceMode::Light
+                                    } else {
+                                        AppearanceMode::Dark
+                                    },
+                                    cx,
+                                );
                                 cx.notify();
-                            }))
-                            .child(widgets::toggle_group_item(
-                                theme,
-                                option.label(),
-                                option == mode,
-                            ))
-                            .into_any_element()
-                    },
-                )),
+                            })),
+                    )
+                    .child(icons::icon(icons::MOON).size(px(14.0)).text_color(if dark {
+                        theme.text
+                    } else {
+                        theme.text_faint
+                    })),
             )
             .into_any_element()
     }
@@ -1500,35 +1709,116 @@ impl Gallery {
                 )
                 .into_any_element(),
 
-            "collapsible" => section
-                .child(
-                    div()
-                        .w(px(320.0))
-                        .child(
-                            div()
-                                .id("collapse")
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    view.expanded = !view.expanded;
-                                    cx.notify();
-                                }))
-                                .child(widgets::collapsible_header(
-                                    &theme,
-                                    "Advanced",
-                                    self.expanded,
-                                )),
-                        )
-                        .when(self.expanded, |el| {
-                            el.child(
+            "collapsible" => {
+                let open = self.details.get(self.running);
+                section
+                    .child(
+                        div()
+                            .w(px(320.0))
+                            .child(
                                 div()
-                                    .pl(px(24.0))
-                                    .pt(px(4.0))
-                                    .text_size(px(12.5))
-                                    .text_color(theme.text_muted)
-                                    .child("Body shown while expanded."),
+                                    .id("collapse")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.expanded = !view.expanded;
+                                        cx.notify();
+                                    }))
+                                    .child(widgets::collapsible_header(
+                                        &theme,
+                                        "Advanced",
+                                        self.expanded,
+                                    )),
                             )
-                        }),
-                )
-                .into_any_element(),
+                            .when(self.expanded, |el| {
+                                el.child(
+                                    div()
+                                        .pl(px(24.0))
+                                        .pt(px(4.0))
+                                        .text_size(px(12.5))
+                                        .text_color(theme.text_muted)
+                                        .child("Body shown while expanded."),
+                                )
+                            }),
+                    )
+                    .child(hint(
+                        &theme,
+                        "The second one follows the run: it opens itself while \
+                         work is streaming in and closes when that stops. Touch \
+                         it once and it is yours — start and stop the run after \
+                         that and it stays where you put it.",
+                    ))
+                    .child(
+                        row()
+                            .child(
+                                div()
+                                    .id("takeover-run")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.running = !view.running;
+                                        cx.notify();
+                                    }))
+                                    .child(popover::button(
+                                        &theme,
+                                        if self.running {
+                                            "Finish the run"
+                                        } else {
+                                            "Start a run"
+                                        },
+                                        "g-takeover-run",
+                                    )),
+                            )
+                            // Which of the two rules is answering, on the page —
+                            // the same trick the follow-scroll row uses. A
+                            // behaviour you can only infer is one nobody checks.
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_family(theme.font_mono.clone())
+                                    .text_color(theme.text_faint)
+                                    .child(SharedString::from(format!(
+                                        "open: {open} — {}",
+                                        if self.details == widgets::Takeover::default() {
+                                            "following the run"
+                                        } else {
+                                            "yours"
+                                        }
+                                    ))),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(320.0))
+                            .child(
+                                div()
+                                    .id("takeover-head")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        let running = view.running;
+                                        view.details.toggle(running);
+                                        cx.notify();
+                                    }))
+                                    .child(widgets::collapsible_header(
+                                        &theme,
+                                        if self.running { "Working" } else { "Details" },
+                                        open,
+                                    )),
+                            )
+                            .when(open, |el| {
+                                el.child(
+                                    div()
+                                        .ml(px(10.0))
+                                        .pl(px(12.0))
+                                        .border_l_1()
+                                        .border_color(theme.border)
+                                        .text_size(px(12.5))
+                                        .text_color(theme.text_muted)
+                                        .child(if self.running {
+                                            "Reading crates/ui/src/widgets.rs…"
+                                        } else {
+                                            "Read crates/ui/src/widgets.rs."
+                                        }),
+                                )
+                            }),
+                    )
+                    .into_any_element()
+            }
 
             "breadcrumb" => section
                 .child(
@@ -1696,6 +1986,100 @@ impl Gallery {
                     .into_any_element()
             }
 
+            "control-bar" => {
+                let glyph = |path: &'static str| {
+                    let hover = theme.glass_hover();
+                    bezel_ui::control_bar::bar_button(path, 30.0, theme.text_muted)
+                        .id(path)
+                        .hover(move |s| s.bg(hover))
+                };
+                let label = |copy: &'static str| {
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(theme.text_muted)
+                        .child(copy)
+                };
+                section
+                    .child(hint(
+                        &theme,
+                        "One bar, three jobs, two shapes. The centre is centred on \
+                         the BAR rather than on what the clusters leave — five \
+                         controls on the left and one on the right still put it \
+                         on axis.",
+                    ))
+                    .child(widgets::field_label(&theme, "Transport — Shape::Pill"))
+                    .child(bezel_ui::control_bar::control_bar(
+                        &theme,
+                        ControlBarShape::Pill,
+                        vec![
+                            glyph(icons::SHUFFLE).into_any_element(),
+                            glyph(icons::SKIP_PREVIOUS).into_any_element(),
+                            glyph(icons::PLAY_BOLD).into_any_element(),
+                            glyph(icons::SKIP_NEXT).into_any_element(),
+                            glyph(icons::REPEAT).into_any_element(),
+                        ],
+                        Some(label("Grain").into_any_element()),
+                        vec![glyph(icons::VOLUME_LOUD).into_any_element()],
+                    ))
+                    // Rounded, not a stadium: a composer is not a media control,
+                    // and the stadium reads as one.
+                    .child(widgets::field_label(&theme, "Composer — Shape::Rounded"))
+                    .child(bezel_ui::control_bar::control_bar(
+                        &theme,
+                        ControlBarShape::Rounded,
+                        vec![glyph(icons::PLUS).into_any_element()],
+                        Some(label("Ask anything…").into_any_element()),
+                        vec![
+                            glyph(icons::MICROPHONE).into_any_element(),
+                            glyph(icons::ARROW_UP).into_any_element(),
+                        ],
+                    ))
+                    .child(widgets::field_label(&theme, "Floating over content"))
+                    // The same striped band the materials page uses, and the only
+                    // place either shape's blur can be caught disagreeing with
+                    // its border.
+                    .child(
+                        div()
+                            .relative()
+                            .h(px(130.0))
+                            .rounded(px(Theme::PANEL_RADIUS))
+                            .overflow_hidden()
+                            .child(div().absolute().inset_0().flex().flex_row().children(
+                                (0..14).map(|i| {
+                                    div().flex_1().h_full().bg(if i % 2 == 0 {
+                                        theme.accent
+                                    } else {
+                                        theme.warning
+                                    })
+                                }),
+                            ))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .bottom(px(16.0))
+                                    .left_0()
+                                    .right_0()
+                                    .flex()
+                                    .justify_center()
+                                    .child(bezel_ui::control_bar::control_bar(
+                                        &theme,
+                                        ControlBarShape::Pill,
+                                        vec![
+                                            glyph(icons::SIDEBAR_MINIMALISTIC_LEFT)
+                                                .into_any_element(),
+                                            glyph(icons::MAGNIFER).into_any_element(),
+                                        ],
+                                        None,
+                                        vec![
+                                            glyph(icons::TUNING).into_any_element(),
+                                            glyph(icons::SETTINGS_MINIMALISTIC).into_any_element(),
+                                        ],
+                                    )),
+                            ),
+                    )
+                    .into_any_element()
+            }
+
             "menu" => section
                 .child(
                     popover::popover_card(&theme).w(px(240.0)).children([
@@ -1740,6 +2124,37 @@ impl Gallery {
                 .into_any_element(),
 
             "loaders" => section
+                .child(hint(
+                    &theme,
+                    "The four orbs are bezel's own. Everything below them is a grid \
+                     of cells; the orbs are circles, because circles are the whole \
+                     vocabulary gpui gives at this rev — no rotation, no conic \
+                     gradient, no blur filter.",
+                ))
+                .child(
+                    row().gap(px(24.0)).children(
+                        [
+                            (loaders::Orb::Cluster, "cluster"),
+                            (loaders::Orb::Ring, "ring"),
+                            (loaders::Orb::Converge, "converge"),
+                            (loaders::Orb::Bloom, "bloom"),
+                        ]
+                        .map(|(shape, label)| {
+                            stack()
+                                .items_center()
+                                .gap(px(10.0))
+                                .child(loaders::orb(shape, label, 44.0, &theme, view, cx))
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .font_family(theme.font_mono.clone())
+                                        .text_color(theme.text_faint)
+                                        .child(label),
+                                )
+                        }),
+                    ),
+                )
+                .child(hint(&theme, "And the older three:"))
                 .child(
                     row()
                         .child(loaders::pulse_loader("g-pulse", &theme, 8.0, view, cx))
@@ -1850,6 +2265,81 @@ impl Gallery {
                 .child(widgets::error_strip(&theme, "Something went wrong."))
                 .child(widgets::warning_strip(&theme, "Heads up, check this."))
                 .into_any_element(),
+
+            "step-row" => {
+                let card = |index: usize, first: bool| {
+                    let Step {
+                        icon,
+                        title,
+                        detail,
+                        meta,
+                        failed,
+                        output,
+                    } = STEPS[index];
+                    let open = self.step_open[index];
+                    div()
+                        .when(!first, |el| el.border_t_1().border_color(theme.border))
+                        .child(
+                            widgets::step_row(
+                                &theme,
+                                icon,
+                                title,
+                                Some(SharedString::from(detail)),
+                                Some(SharedString::from(meta)),
+                                failed,
+                                output.map(|_| open),
+                            )
+                            .id(SharedString::from(format!("step-{index}")))
+                            .on_click(cx.listener(
+                                move |view, _, _, cx| {
+                                    view.step_open[index] = !view.step_open[index];
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                        .when_some(output.filter(|_| open), |el, output| {
+                            el.child(widgets::step_output(
+                                &theme,
+                                SharedString::from(format!("step-out-{index}")),
+                                output,
+                            ))
+                        })
+                };
+
+                section
+                    .child(hint(
+                        &theme,
+                        "An operation with an outcome: press a row to see what it \
+                         printed. A step with no output has no chevron — a \
+                         disclosure onto nothing is worse than none.",
+                    ))
+                    .child(
+                        // Standalone: one step in its own box.
+                        div()
+                            .w(px(420.0))
+                            .rounded(px(Theme::PANEL_RADIUS))
+                            .border_1()
+                            .border_color(theme.border)
+                            .overflow_hidden()
+                            .child(card(0, true)),
+                    )
+                    .child(hint(
+                        &theme,
+                        "Or as a run: the same rows, borderless, in one box that \
+                         owns the hairlines between them.",
+                    ))
+                    .child(
+                        div()
+                            .w(px(420.0))
+                            .rounded(px(Theme::PANEL_RADIUS))
+                            .border_1()
+                            .border_color(theme.border)
+                            .overflow_hidden()
+                            .child(card(1, true))
+                            .child(card(2, false)),
+                    )
+                    .into_any_element()
+            }
 
             "skeleton" => section
                 .child(popover::redacted_rows("g-redacted", &theme, 3, view, cx))
@@ -2018,6 +2508,88 @@ impl Gallery {
                             "scroll-demo-bar",
                             &self.demo_scroll,
                             &self.demo_bar,
+                        )),
+                )
+                .into_any_element(),
+
+            "follow" => section
+                .child(hint(
+                    &theme,
+                    "Append a line and the box stays on the newest one. Scroll up \
+                     and it lets go — scroll back to the bottom and it takes over \
+                     again. Neither is an event it subscribes to: the overflow \
+                     changing is what tells appended content apart from you.",
+                ))
+                .child(
+                    row()
+                        .child(
+                            div()
+                                .id("follow-append")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.log_lines += 1;
+                                    cx.notify();
+                                }))
+                                .child(popover::button(&theme, "Append a line", "g-follow-add")),
+                        )
+                        .child(
+                            div()
+                                .id("follow-jump")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.log_follow.follow();
+                                    cx.notify();
+                                }))
+                                .child(popover::button(&theme, "Jump to latest", "g-follow-pin")),
+                        )
+                        // The state, on the page — the same trick the virtualized
+                        // list uses for its built count. A behaviour you can only
+                        // infer is a behaviour nobody can check.
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_family(theme.font_mono.clone())
+                                .text_color(if self.log_follow.following() {
+                                    theme.success
+                                } else {
+                                    theme.text_faint
+                                })
+                                .child(SharedString::from(format!(
+                                    "following: {}",
+                                    self.log_follow.following()
+                                ))),
+                        ),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .h(px(180.0))
+                        .w_full()
+                        .rounded(px(Theme::PANEL_RADIUS))
+                        .border_1()
+                        .border_color(theme.border)
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .id("follow-demo")
+                                .size_full()
+                                .overflow_y_scroll()
+                                .track_scroll(&self.log_scroll)
+                                .child(div().p(px(14.0)).flex().flex_col().gap(px(6.0)).children(
+                                    (1..=self.log_lines).map(|line| {
+                                        div()
+                                            .text_size(px(12.0))
+                                            .font_family(theme.font_mono.clone())
+                                            .text_color(theme.text_muted)
+                                            .child(SharedString::from(format!(
+                                                "[{line:04}] token stream line {line}"
+                                            )))
+                                    }),
+                                )),
+                        )
+                        .child(scroll::follow(&self.log_scroll, &self.log_follow))
+                        .child(scroll::scrollbar(
+                            "follow-demo-bar",
+                            &self.log_scroll,
+                            &self.log_bar,
                         )),
                 )
                 .into_any_element(),
@@ -2254,6 +2826,15 @@ impl Gallery {
                     )
                     .into_any_element()
             }
+
+            // ---- Patterns ----------------------------------------------------
+            "agent-activity" => self.activity.clone().into_any_element(),
+            "agent-tools" => self.tool_calls.clone().into_any_element(),
+            "agent-composer" => self.agent_composer.clone().into_any_element(),
+            "agent-transcript" => self.transcript.clone().into_any_element(),
+            "agent-diff" => self.diff.clone().into_any_element(),
+            "music-player" => self.music.clone().into_any_element(),
+            "document" => self.document.clone().into_any_element(),
 
             _ => div().into_any_element(),
         }
@@ -2623,51 +3204,60 @@ impl Render for Gallery {
         let section =
             section_at(self.selected[self.tab]).unwrap_or(&TABS[self.tab].groups[0].sections[0]);
         let body = self.section_body(section.key, cx);
-        let content = div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .child(self.nav(&theme, cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.rail(&theme, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .child(self.header(section, &theme))
-                            .child(
-                                div()
-                                    .relative()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .child(
-                                        div()
-                                            .id("gallery-pane")
-                                            .size_full()
-                                            .overflow_y_scroll()
-                                            .track_scroll(&self.pane_scroll)
-                                            // The column width components are
-                                            // designed for; several are `w_full`
-                                            // and would otherwise stretch to the
-                                            // whole pane.
-                                            .child(div().p(px(32.0)).child(column().child(body))),
-                                    )
-                                    .child(scroll::scrollbar(
-                                        "pane-bar",
-                                        &self.pane_scroll,
-                                        &self.pane_bar,
-                                    )),
-                            ),
-                    ),
-            );
+        let pane = div().relative().flex_1().min_h_0().map(|pane| {
+            if TABS[self.tab].full_bleed {
+                // A pattern is a screen: it takes the pane whole and
+                // scrolls its own parts, so neither the fixed column nor
+                // the pane's own scrollbar applies to it.
+                pane.child(div().size_full().p(px(24.0)).child(body))
+            } else {
+                pane.child(
+                    div()
+                        .id("gallery-pane")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.pane_scroll)
+                        // The column width components are designed for;
+                        // several are `w_full` and would otherwise stretch
+                        // to the whole pane.
+                        .child(div().p(px(32.0)).child(column().child(body))),
+                )
+                .child(scroll::scrollbar(
+                    "pane-bar",
+                    &self.pane_scroll,
+                    &self.pane_bar,
+                ))
+            }
+        });
+        let content = if self.embedded {
+            // The page around the iframe is already the nav, the rail and the
+            // header — repeating them inside it would be the same chrome twice.
+            div().flex().flex_col().size_full().child(pane)
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .child(self.nav(&theme, cx))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_1()
+                        .min_h_0()
+                        .child(self.rail(&theme, cx))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .child(self.header(section, &theme))
+                                .child(pane),
+                        ),
+                )
+        };
 
         // A hover fade is a colour computed at paint time, not an animation
         // element that drives itself: `hover_listener` marks the window dirty
@@ -2728,6 +3318,12 @@ impl Render for Gallery {
                                     .into_any_element()
                                 },
                             ))
+                            // Dismissal is the caller's, and this is that
+                            // caller: press anywhere off the card and the menu
+                            // goes away.
+                            .on_mouse_down_out(
+                                cx.listener(|view, _, _, cx| view.close_context_menu(cx)),
+                            )
                             .into_any_element(),
                         closing,
                     ))
@@ -2770,6 +3366,7 @@ impl Render for Gallery {
                                 ),
                         )
                         .into_any_element(),
+                    cx.listener(|view, _, _, cx| view.close_dialog(cx)),
                 ))
             })
             .when(self.sheet.get().is_some(), |root| {
@@ -2833,7 +3430,16 @@ impl Render for Gallery {
                         // window height (flex default is align: stretch).
                         .items_start()
                         .pt(px(120.0))
-                        .child(palette),
+                        // The palette binds `escape` itself, but a scrim you
+                        // can press and nothing happens reads as a stuck
+                        // window. The wrapper sizes to the card, so "out" is
+                        // the scrim.
+                        .child(div().child(palette).on_mouse_down_out(cx.listener(
+                            |view, _, _, cx| {
+                                view.palette = None;
+                                cx.notify();
+                            },
+                        ))),
                 )
             })
     }

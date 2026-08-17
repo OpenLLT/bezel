@@ -68,7 +68,7 @@ impl<T> Loadable<T> {
 pub struct Popup<T> {
     /// `Some((state, closing_since))` while mounted; `closing_since` is the
     /// exit-phase start.
-    inner: Option<(T, Option<std::time::Instant>)>,
+    inner: Option<(T, Option<web_time::Instant>)>,
     /// Whether the popup was still mounted when the current trigger press
     /// began — see [`Self::note_trigger_press`].
     pressed_while_open: bool,
@@ -99,7 +99,7 @@ impl<T> Popup<T> {
 
     /// When the exit phase began — what the render path hands to the popover
     /// wrappers, which derive the eased exit progress from it each frame.
-    pub fn closing_since(&self) -> Option<std::time::Instant> {
+    pub fn closing_since(&self) -> Option<web_time::Instant> {
         match &self.inner {
             Some((_, Some(since))) => Some(*since),
             _ => None,
@@ -134,7 +134,7 @@ impl<T> Popup<T> {
     pub fn begin_close(&mut self) -> bool {
         match &mut self.inner {
             Some((_, closing @ None)) => {
-                *closing = Some(std::time::Instant::now());
+                *closing = Some(web_time::Instant::now());
                 true
             }
             _ => false,
@@ -360,13 +360,18 @@ pub fn classify_key(key: &str, cmd: bool, ctrl: bool) -> MenuKey {
 /// [`crate::material::MENU_BLUR`] blur from the mount helpers below, plus the
 /// same hairline + baked-in shadow. Opaque platforms keep the near-opaque
 /// tone the reference composites to on the dark panels (~#161616).
+/// The inner inset of a [`popover_card`], and so the amount [`menu_row`]'s
+/// corners come in by. Named because two things read it: the card's padding and
+/// its rows' radius. Change it and the rows follow.
+pub(crate) const MENU_PAD: f32 = 4.0;
+
 pub fn popover_card(theme: &Theme) -> gpui::Div {
     let card = div()
         .border_1()
         .border_color(hairline(0.10))
-        .rounded(px(12.0))
+        .rounded(px(Theme::SURFACE_RADIUS))
         .shadow_lg()
-        .p(px(4.0))
+        .p(px(MENU_PAD))
         .overflow_hidden()
         .text_size(px(13.0))
         .text_color(theme.text);
@@ -403,7 +408,7 @@ fn pinned_layer(layer: AnyElement) -> AnyElement {
 /// Eased exit progress (0..=1) for a [`Popup`] closing instant, computed from
 /// the wall clock at render time. Monotonic by construction — unlike the
 /// animation element's own clock, it can never replay from 0 mid-exit.
-fn exit_progress(since: std::time::Instant) -> f32 {
+fn exit_progress(since: web_time::Instant) -> f32 {
     let total = motion::MENU_OUT
         .total()
         .mul_f32(motion::speed_scale())
@@ -422,7 +427,7 @@ fn exit_progress(since: std::time::Instant) -> f32 {
 /// hold full strength through the fade and pop off at unmount.
 fn material_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
     let blur = crate::material::MENU_BLUR * (1.0 - exit.unwrap_or(0.0));
-    crate::material::material(12.0, blur, content).into_any_element()
+    crate::material::material(Theme::SURFACE_RADIUS, blur, content).into_any_element()
 }
 
 /// Entrance or exit motion for a popover layer. While exiting (the [`Popup`]
@@ -451,7 +456,7 @@ fn menu_motion(id: SharedString, exit: Option<f32>, inner: gpui::Div) -> AnyElem
 pub fn anchored_menu(
     id: impl Into<SharedString>,
     content: AnyElement,
-    closing: Option<std::time::Instant>,
+    closing: Option<web_time::Instant>,
 ) -> AnyElement {
     let exit = closing.map(exit_progress);
     let content = material_menu(exit, content);
@@ -478,7 +483,7 @@ pub fn anchored_menu(
 pub fn anchored_menu_below(
     id: impl Into<SharedString>,
     content: AnyElement,
-    closing: Option<std::time::Instant>,
+    closing: Option<web_time::Instant>,
 ) -> AnyElement {
     anchored_menu_below_gap(id, content, closing, 6.0)
 }
@@ -489,7 +494,7 @@ pub fn anchored_menu_below(
 pub fn anchored_menu_below_gap(
     id: impl Into<SharedString>,
     content: AnyElement,
-    closing: Option<std::time::Instant>,
+    closing: Option<web_time::Instant>,
     gap: f32,
 ) -> AnyElement {
     let exit = closing.map(exit_progress);
@@ -522,7 +527,7 @@ pub fn anchored_menu_below_gap(
 pub fn anchored_menu_above(
     id: impl Into<SharedString>,
     content: AnyElement,
-    closing: Option<std::time::Instant>,
+    closing: Option<web_time::Instant>,
 ) -> AnyElement {
     let exit = closing.map(exit_progress);
     let content = material_menu(exit, content);
@@ -549,7 +554,7 @@ pub fn anchored_menu_above_at(
     id: impl Into<SharedString>,
     position: Point<Pixels>,
     content: AnyElement,
-    closing: Option<std::time::Instant>,
+    closing: Option<web_time::Instant>,
 ) -> AnyElement {
     div()
         .absolute()
@@ -566,7 +571,7 @@ pub fn anchored_menu_above_at(
 pub fn anchored_menu_above_end(
     id: impl Into<SharedString>,
     content: AnyElement,
-    closing: Option<std::time::Instant>,
+    closing: Option<web_time::Instant>,
 ) -> AnyElement {
     let exit = closing.map(exit_progress);
     let content = material_menu(exit, content);
@@ -598,7 +603,7 @@ pub fn menu_at(
     id: impl Into<SharedString>,
     position: Point<Pixels>,
     content: AnyElement,
-    closing: Option<std::time::Instant>,
+    closing: Option<web_time::Instant>,
 ) -> AnyElement {
     let exit = closing.map(exit_progress);
     let content = material_menu(exit, content);
@@ -630,26 +635,37 @@ pub(crate) fn scrim_alpha(alpha_dark: f32) -> gpui::Hsla {
 /// `viewport` is the window size (an `anchored` layer sizes to its children,
 /// so the scrim needs explicit dimensions). The frost radius matches
 /// [`dialog_card`]'s 16px rounding.
+/// `on_dismiss` is the scrim press. It is a parameter rather than the caller's
+/// `.on_mouse_down_out`, for the same reason [`sheet`]'s is: the scrim lives
+/// inside this deferred layer, so nothing outside can reach it. Without it a
+/// dialog could not be dismissed by clicking away from it *by any caller* —
+/// which is how this one shipped, and what it looked like was a dialog that
+/// only closed on its own buttons.
 pub fn modal(
     id: impl Into<ElementId>,
     viewport: gpui::Size<Pixels>,
     card: AnyElement,
+    on_dismiss: impl Fn(&gpui::MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
-    modal_with(id, viewport, card, 16.0, 0.6)
+    modal_with(id, viewport, card, DIALOG_RADIUS, 0.6, on_dismiss)
 }
 
 /// [`modal`] for glass-tinted cards (the add-space palette): a LIGHTER scrim,
 /// so the material card reads like the popovers — the standard 0.6 dim buried
 /// the backdrop hue under the blur and the palette came out a flat grey slab
-/// next to the hue-inheriting menus (user report). `corner_radius` must match
-/// the card's rounding.
+/// next to the hue-inheriting menus (user report).
+///
+/// The radius is [`Theme::SURFACE_RADIUS`], not a parameter: a glass-tinted
+/// modal *is* a popover surface, and the parameter this used to take carried
+/// the doc line "must match the card's rounding" — a footgun handed to the
+/// caller in writing.
 pub fn modal_glass(
     id: impl Into<ElementId>,
     viewport: gpui::Size<Pixels>,
     card: AnyElement,
-    corner_radius: f32,
+    on_dismiss: impl Fn(&gpui::MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
-    modal_with(id, viewport, card, corner_radius, 0.35)
+    modal_with(id, viewport, card, Theme::SURFACE_RADIUS, 0.35, on_dismiss)
 }
 
 fn modal_with(
@@ -658,6 +674,7 @@ fn modal_with(
     card: AnyElement,
     corner_radius: f32,
     scrim: f32,
+    on_dismiss: impl Fn(&gpui::MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
     let card = crate::material::material(corner_radius, crate::material::MENU_BLUR, card)
         .into_any_element();
@@ -673,7 +690,15 @@ fn modal_with(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(motion::dialog_in(id, div().child(card))),
+                    // On the card's wrapper, not the scrim: a press inside the
+                    // card is not "out", so the dialog's own buttons keep
+                    // working with no occluding overlay and no propagation
+                    // games. The scrim covers the viewport and occludes, so
+                    // "outside the card" and "on the scrim" are the same press.
+                    .child(motion::dialog_in(
+                        id,
+                        div().child(card).on_mouse_down_out(on_dismiss),
+                    )),
             ),
     )
     .priority(2)
@@ -691,10 +716,12 @@ pub enum Side {
     Right,
 }
 
-/// Corner rounding of a [`sheet_panel`] — the two inner corners; the two on
-/// the window edge are off-screen. Matches [`dialog_card`], since a sheet is
-/// the same card pinned instead of centred.
-const SHEET_RADIUS: f32 = 16.0;
+/// Corner rounding of [`dialog_card`], and of a [`sheet_panel`]'s two inner
+/// corners (the two on the window edge are off-screen). One number rather than
+/// two that happen to match: a sheet *is* the dialog card, pinned to an edge
+/// instead of centred. Read three times over — the card, the sheet panel, and
+/// the blur under each — which is exactly why it is not a literal.
+const DIALOG_RADIUS: f32 = 16.0;
 
 /// The full-height panel body of a [`sheet`]: glass card chrome rounded and
 /// hairlined on its *inner* edge only, so it reads as pulled out of the window
@@ -708,11 +735,11 @@ pub fn sheet_panel(theme: &Theme, side: Side) -> gpui::Div {
         .text_color(theme.text);
     let card = match side {
         Side::Left => card
-            .rounded_r(px(SHEET_RADIUS))
+            .rounded_r(px(DIALOG_RADIUS))
             .border_r_1()
             .border_color(hairline(0.10)),
         Side::Right => card
-            .rounded_l(px(SHEET_RADIUS))
+            .rounded_l(px(DIALOG_RADIUS))
             .border_l_1()
             .border_color(hairline(0.10)),
     };
@@ -741,7 +768,7 @@ pub fn sheet(
     side: Side,
     width: Pixels,
     content: AnyElement,
-    closing: Option<std::time::Instant>,
+    closing: Option<web_time::Instant>,
     on_dismiss: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
     let id = id.into();
@@ -753,7 +780,7 @@ pub fn sheet(
         .top_0()
         .bottom_0()
         .w(width)
-        .child(crate::material::material(SHEET_RADIUS, blur, content));
+        .child(crate::material::material(DIALOG_RADIUS, blur, content));
     // `t` runs 0 (fully off-screen) → 1 (seated against the edge).
     let seat = move |el: gpui::Div, t: f32| {
         let inset = width * (t - 1.0);
@@ -812,7 +839,10 @@ pub fn menu_row(theme: &Theme, active: bool, fade_key: impl Into<SharedString>) 
         .gap(px(10.0))
         .px(px(8.0))
         .py(px(6.0))
-        .rounded(px(8.0))
+        // Concentric with the card it sits in rather than a radius of its own:
+        // 12 − 4 = 8, which is where the crate's most-repeated corner value
+        // came from all along.
+        .rounded(px(Theme::inset_radius(Theme::SURFACE_RADIUS, MENU_PAD)))
         .text_size(px(13.0))
         .cursor_pointer();
     if active {
@@ -1017,10 +1047,12 @@ pub fn kbd_hint(theme: &Theme, label: &str) -> gpui::Div {
 /// p-1, only a 4px bottom margin).
 pub fn search_input_frame(_theme: &Theme, input: AnyElement) -> gpui::Div {
     div()
-        .mb(px(4.0))
+        .mb(px(MENU_PAD))
         .px(px(10.0))
         .py(px(6.0))
-        .rounded(px(8.0))
+        // Concentric with the card, like [`menu_row`] — this frame sits on the
+        // same inset, and its own doc already said so.
+        .rounded(px(Theme::inset_radius(Theme::SURFACE_RADIUS, MENU_PAD)))
         .bg(ink(0.04))
         .text_size(px(13.0))
         .child(input)
@@ -1051,7 +1083,7 @@ pub fn dialog_card(theme: &Theme) -> gpui::Div {
     div()
         .w(px(360.0))
         .p(px(20.0))
-        .rounded(px(16.0))
+        .rounded(px(DIALOG_RADIUS))
         .bg(theme.surface_dialog)
         .border_1()
         .border_color(hairline(0.10))
@@ -1086,7 +1118,7 @@ pub fn dialog_field(input: AnyElement) -> gpui::Div {
         .w_full()
         .px(px(12.0))
         .py(px(8.0))
-        .rounded(px(8.0))
+        .rounded(px(Theme::BUTTON_RADIUS))
         .border_1()
         .border_color(hairline(0.08))
         .bg(ink(0.04))
@@ -1102,7 +1134,7 @@ pub fn button(theme: &Theme, label: &str, fade_key: impl Into<SharedString>) -> 
     let mut btn = div()
         .px(px(12.0))
         .py(px(6.0))
-        .rounded(px(8.0))
+        .rounded(px(Theme::BUTTON_RADIUS))
         .text_size(px(13.0))
         .text_color(motion::hover_blend(&fade_key, theme.text_muted, theme.text))
         .bg(motion::hover_blend(
@@ -1122,7 +1154,7 @@ pub fn button_prominent(theme: &Theme, label: &str) -> gpui::Div {
     div()
         .px(px(12.0))
         .py(px(6.0))
-        .rounded(px(8.0))
+        .rounded(px(Theme::BUTTON_RADIUS))
         .bg(theme.text)
         .text_size(px(13.0))
         .font_weight(gpui::FontWeight::MEDIUM)
@@ -1137,7 +1169,7 @@ pub fn button_destructive(theme: &Theme, label: &str) -> gpui::Div {
     div()
         .px(px(12.0))
         .py(px(6.0))
-        .rounded(px(8.0))
+        .rounded(px(Theme::BUTTON_RADIUS))
         .bg(theme.danger_strong)
         .text_size(px(13.0))
         .font_weight(gpui::FontWeight::MEDIUM)
