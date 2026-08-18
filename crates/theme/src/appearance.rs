@@ -19,10 +19,9 @@
 //! per-view prepaint cache for the frame, which is the only thing that forces
 //! already-laid-out elements to re-run their paint with the new palette.
 
+use crate::{Appearance, Theme};
 use gpui::{App, Global, Subscription, Window};
 use serde::{Deserialize, Serialize};
-
-use crate::{Appearance, Theme};
 
 /// The user's appearance preference. Serde-serializable so callers can persist
 /// it wherever their settings live; this crate never touches disk.
@@ -176,8 +175,7 @@ pub fn apply(cx: &mut App) {
 /// until our own notification round-trip repainted it.
 #[cfg(target_os = "macos")]
 fn sync_ns_appearance(mode: AppearanceMode) {
-    use objc::runtime::Object;
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
     // NSAppearanceName constants are NSStrings whose value equals the
     // constant's own name (AppKit documents them as stable identifiers), so
     // building them from literals avoids linking the extern statics.
@@ -217,52 +215,5 @@ pub fn reapply_window_background(cx: &mut App) {
                 window.set_background_appearance(wanted);
             })
             .ok();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn system_mode_follows_the_os() {
-        assert_eq!(
-            resolve(AppearanceMode::System, Appearance::Light),
-            Appearance::Light
-        );
-        assert_eq!(
-            resolve(AppearanceMode::System, Appearance::Dark),
-            Appearance::Dark
-        );
-    }
-
-    #[test]
-    fn pinned_modes_ignore_the_os() {
-        for system in [Appearance::Light, Appearance::Dark] {
-            assert_eq!(resolve(AppearanceMode::Light, system), Appearance::Light);
-            assert_eq!(resolve(AppearanceMode::Dark, system), Appearance::Dark);
-        }
-    }
-
-    #[test]
-    fn default_mode_is_system() {
-        assert_eq!(AppearanceMode::default(), AppearanceMode::System);
-    }
-
-    /// The setting round-trips through the settings file as a lowercase string.
-    #[test]
-    fn mode_serialises_stably() {
-        for (mode, json) in [
-            (AppearanceMode::System, "\"system\""),
-            (AppearanceMode::Light, "\"light\""),
-            (AppearanceMode::Dark, "\"dark\""),
-        ] {
-            assert_eq!(serde_json::to_string(&mode).unwrap(), json);
-            assert_eq!(
-                serde_json::from_str::<AppearanceMode>(json).unwrap(),
-                mode,
-                "{json} should parse back"
-            );
-        }
     }
 }

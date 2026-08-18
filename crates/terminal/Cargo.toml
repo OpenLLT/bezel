@@ -1,7 +1,7 @@
 [package]
-name = "bezel-editor"
+name = "bezel-terminal"
 
-description = "A Notion-style block editor for gpui, editing markdown in place"
+description = "An alacritty-backed terminal emulator and grid view for gpui — bytes in, cells out"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,6 +17,6 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-bezel-markdown.workspace = true
+alacritty_terminal.workspace = true
 bezel-theme.workspace = true
 gpui.workspace = true

@@ -6,33 +6,61 @@
 //! composed exactly once, so the browser is never out of date with the library
 //! it documents.
 
-use std::cell::Cell;
-use std::collections::HashSet;
-use std::rc::Rc;
+use std::{cell::Cell, collections::HashSet, rc::Rc};
 
-use bezel_theme::Theme;
-use bezel_theme::appearance::{self, AppearanceMode};
-use bezel_ui::combobox::Combobox;
-use bezel_ui::control_bar::Shape as ControlBarShape;
-use bezel_ui::date::{Calendar, Date};
-use bezel_ui::hover_card::HoverCard;
-use bezel_ui::input::{Shape, TextField};
-use bezel_ui::list;
-use bezel_ui::menubar::{Item, Menu, Menubar, MenubarEvent};
-use bezel_ui::pagination;
-use bezel_ui::palette::{CommandPalette, PaletteEvent};
-use bezel_ui::scroll::{self, ScrollbarState};
-use bezel_ui::table::{self, Column, Sort, Width};
-use bezel_ui::tooltip::Tooltip;
-use bezel_ui::tree::{self, Direction, Move};
-use bezel_ui::widgets::{SliderDrag, SplitDrag};
-use bezel_ui::{focus, icons, loaders, popover, widgets};
+use bezel_markdown::editor;
+use bezel_theme::{
+    Theme,
+    appearance::{self, AppearanceMode},
+};
+use bezel_ui::{
+    combobox::{self, Combobox},
+    control_bar::Shape as ControlBarShape,
+    date::{self, Calendar, Date},
+    focus,
+    hover_card::HoverCard,
+    icons,
+    input::{self, Shape, TextField},
+    list, loaders,
+    menubar::{self, Item, Menu, Menubar, MenubarEvent},
+    pagination,
+    palette::{self, CommandPalette, PaletteEvent},
+    popover,
+    scroll::{self, ScrollbarState},
+    table::{self, Column, Sort, Width},
+    tooltip::Tooltip,
+    tree::{self, Direction, Move},
+    widgets,
+    widgets::{
+        ButtonStyle, Buttons, Content, Controls, Layout, Scaffolding, SliderDrag, SplitDrag, Status,
+    },
+};
 use gpui::{
-    AnyElement, Axis, Context, DragMoveEvent, Empty, Entity, SharedString, Window, actions, div,
-    prelude::*, px, relative,
+    AnyElement, App, Axis, Context, DragMoveEvent, Empty, Entity, KeyBinding, SharedString, Window,
+    actions, div, prelude::*, px, relative,
 };
 
 actions!(gallery, [OpenPalette, ToggleInspector, ToggleFullScreen]);
+
+/// Every keymap this view needs, in one call.
+///
+/// Two entry points open it — a native window and a browser tab — and a list
+/// each of them keeps by hand is a list they drift out of: the editor's
+/// bindings were installed natively and missing on the web, so typing worked in
+/// the browser and Backspace did not.
+pub fn init(cx: &mut App) {
+    input::init(cx);
+    editor::init(cx);
+    palette::init(cx);
+    combobox::init(cx);
+    date::init(cx);
+    focus::init(cx);
+    menubar::init(cx);
+    tree::init(cx);
+    // A pattern is an app: the composer page binds its own keys.
+    patterns::agent::init(cx);
+    cx.bind_keys([KeyBinding::new("cmd-k", OpenPalette, None)]);
+}
 
 /// gpui builds its element inspector into every debug build; release builds
 /// have no such window method, so the whole surface is debug-only.
@@ -215,11 +243,11 @@ const STEPS: [Step; 3] = [
         meta: "1.4s",
         failed: false,
         output: Some(
-            "running 87 tests\n\
-             test widgets::tests::the_first_press_flips_what_was_on_screen ... ok\n\
-             test scroll::tests::following_means_within_slack_of_the_end ... ok\n\
+            "running 84 tests\n\
+             test widgets::the_first_press_flips_what_was_on_screen ... ok\n\
+             test scroll::following_means_within_slack_of_the_end ... ok\n\
              \n\
-             test result: ok. 87 passed; 0 failed",
+             test result: ok. 84 passed; 0 failed",
         ),
     },
     Step {
@@ -388,6 +416,20 @@ pub const PATTERNS: &[Group] = &[
                 "apps/gallery/src/patterns/transcript.rs",
             ),
             section("agent-diff", "Diff", "apps/gallery/src/patterns/diff.rs"),
+            // Native-only: the terminal crate sits off the wasm build
+            // (alacritty_terminal pulls `home`, which does not compile for
+            // wasm32) — see the gallery manifest.
+            #[cfg(not(target_family = "wasm"))]
+            section(
+                "agent-terminal",
+                "Terminal",
+                "apps/gallery/src/patterns/terminal.rs",
+            ),
+            section(
+                "agent-orbs",
+                "Thinking orbs",
+                "apps/gallery/src/patterns/orbs.rs",
+            ),
         ],
     },
     Group {
@@ -443,7 +485,7 @@ pub const COMPONENTS: &[Group] = &[
     Group {
         title: "Selection & input",
         sections: &[
-            section("buttons", "Buttons", "crates/ui/src/popover.rs"),
+            section("buttons", "Buttons", "crates/ui/src/widgets/buttons.rs"),
             section("text-field", "Text field", "crates/ui/src/input.rs"),
             section("textarea", "Textarea", "crates/ui/src/input.rs"),
             section("select", "Select", "crates/ui/src/widgets.rs"),
@@ -526,8 +568,7 @@ pub const COMPONENTS: &[Group] = &[
 /// The keys [`Gallery::section_body`] answers with a TODO page. Listed rather
 /// than derived because the arms cannot be enumerated at runtime; a test keeps
 /// this in step with the [`planned`] rows.
-#[cfg(test)]
-const PLANNED_BODIES: &[&str] = &[];
+pub const PLANNED_BODIES: &[&str] = &[];
 
 fn section_at(key: &str) -> Option<&'static Section> {
     TABS.iter()
@@ -654,6 +695,9 @@ pub struct Gallery {
     diff: Entity<patterns::diff::Diff>,
     music: Entity<patterns::music::MusicPlayer>,
     document: Entity<patterns::document::Document>,
+    #[cfg(not(target_family = "wasm"))]
+    terminal: Entity<patterns::terminal::Terminal>,
+    orbs: Entity<patterns::orbs::Orbs>,
     /// Which top-nav tab is open.
     tab: usize,
     /// Where you were in each tab — switching away and back should land you
@@ -784,6 +828,9 @@ impl Gallery {
             diff: cx.new(|_| patterns::diff::Diff),
             music: cx.new(|_| patterns::music::MusicPlayer::default()),
             document: cx.new(patterns::document::Document::new),
+            #[cfg(not(target_family = "wasm"))]
+            terminal: cx.new(patterns::terminal::Terminal::new),
+            orbs: cx.new(patterns::orbs::Orbs::new),
             embedded: false,
         }
     }
@@ -1096,7 +1143,8 @@ impl Gallery {
                     // clicks over a box narrower than what it paints, which is
                     // the open hit-testing bug in this tree.
                     .child(
-                        widgets::toggle(theme, dark)
+                        theme
+                            .toggle(dark)
                             .id("appearance")
                             .cursor_pointer()
                             .on_click(cx.listener(move |_, _, _, cx| {
@@ -1414,9 +1462,9 @@ impl Gallery {
             "buttons" => {
                 let labels = ["Ghost", "Prominent", "Destructive"];
                 let faces = [
-                    popover::button(&theme, labels[0], "g-ghost"),
-                    popover::button_prominent(&theme, labels[1]),
-                    popover::button_destructive(&theme, labels[2]),
+                    theme.button(labels[0], ButtonStyle::Ghost, Some("g-ghost".into())),
+                    theme.button(labels[1], ButtonStyle::Prominent, None),
+                    theme.button(labels[2], ButtonStyle::Destructive, None),
                 ];
                 section
                     .child(hint(
@@ -1472,7 +1520,7 @@ impl Gallery {
                         focus::focusable(
                             &theme,
                             &self.switches[index],
-                            widgets::toggle(&theme, self.switched[index]),
+                            theme.toggle(self.switched[index]),
                         ),
                         SharedString::from(format!("toggle-{index}")),
                         cx,
@@ -1488,8 +1536,8 @@ impl Gallery {
             "badge" => section
                 .child(
                     row()
-                        .child(widgets::badge(&theme, "badge"))
-                        .child(widgets::badge_active(&theme, "active")),
+                        .child(theme.badge("badge"))
+                        .child(theme.badge_active("active")),
                 )
                 .into_any_element(),
 
@@ -1507,11 +1555,12 @@ impl Gallery {
                                     }),
                                 )
                                 .on_click(cx.listener(|view, _, _, cx| view.toggle_theme_menu(cx)))
-                                .child(widgets::select_trigger(
-                                    &theme,
-                                    SELECT_CHOICES[self.theme_choice],
-                                    menu_open,
-                                ))
+                                .child(
+                                    theme.select_trigger(
+                                        SELECT_CHOICES[self.theme_choice],
+                                        menu_open,
+                                    ),
+                                )
                                 .when(menu_open, |trigger| {
                                     trigger.child(popover::anchored_menu_below(
                                         "theme-select-menu",
@@ -1585,7 +1634,7 @@ impl Gallery {
                                 focus::focusable(
                                     &theme,
                                     &self.checkboxes[index],
-                                    widgets::checkbox(&theme, self.checked[index]),
+                                    theme.checkbox(self.checked[index]),
                                 ),
                                 SharedString::from(format!("checkbox-{index}")),
                                 cx,
@@ -1601,7 +1650,7 @@ impl Gallery {
                                 focus::focusable(
                                     &theme,
                                     &self.radios[index],
-                                    widgets::radio_button(&theme, self.radio == index),
+                                    theme.radio_button(self.radio == index),
                                 ),
                                 SharedString::from(format!("radio-{index}")),
                                 cx,
@@ -1616,11 +1665,7 @@ impl Gallery {
                 .into_any_element(),
 
             "avatar" => section
-                .child(
-                    row()
-                        .child(widgets::avatar(&theme, "TC"))
-                        .child(widgets::avatar(&theme, "K")),
-                )
+                .child(row().child(theme.avatar("TC")).child(theme.avatar("K")))
                 .into_any_element(),
 
             "progress" => section
@@ -1630,8 +1675,8 @@ impl Gallery {
                         .flex()
                         .flex_col()
                         .gap(px(16.0))
-                        .child(widgets::progress_bar(&theme, 0.35))
-                        .child(widgets::progress_bar(&theme, 0.8)),
+                        .child(theme.progress_bar(0.35))
+                        .child(theme.progress_bar(0.8)),
                 )
                 .into_any_element(),
 
@@ -1642,7 +1687,7 @@ impl Gallery {
                 ))
                 .child(
                     div().w(px(280.0)).child(
-                        focus::focusable(&theme, &self.slider, widgets::slider(&theme, self.level))
+                        focus::focusable(&theme, &self.slider, theme.slider(self.level))
                             .id("slider")
                             // The element is its own drag source, so the gesture
                             // starts wherever the pointer went down on the track.
@@ -1681,7 +1726,7 @@ impl Gallery {
                     "One of three: space or enter picks the focused segment.",
                 ))
                 .child(
-                    widgets::toggle_group(&theme).children(
+                    theme.toggle_group().children(
                         ["Day", "Week", "Month"]
                             .into_iter()
                             .enumerate()
@@ -1690,11 +1735,7 @@ impl Gallery {
                                     focus::focusable(
                                         &theme,
                                         &self.segments[index],
-                                        widgets::toggle_group_item(
-                                            &theme,
-                                            label,
-                                            self.segment == index,
-                                        ),
+                                        theme.toggle_group_item(label, self.segment == index),
                                     ),
                                     SharedString::from(format!("segment-{index}")),
                                     cx,
@@ -1722,11 +1763,11 @@ impl Gallery {
                                         view.expanded = !view.expanded;
                                         cx.notify();
                                     }))
-                                    .child(widgets::collapsible_header(
-                                        &theme,
-                                        "Advanced",
-                                        self.expanded,
-                                    )),
+                                    .child(
+                                        theme
+                                            .collapsible_header("Advanced", self.expanded)
+                                            .hover(widgets::collapsible_header_hover),
+                                    ),
                             )
                             .when(self.expanded, |el| {
                                 el.child(
@@ -1755,14 +1796,14 @@ impl Gallery {
                                         view.running = !view.running;
                                         cx.notify();
                                     }))
-                                    .child(popover::button(
-                                        &theme,
+                                    .child(theme.button(
                                         if self.running {
                                             "Finish the run"
                                         } else {
                                             "Start a run"
                                         },
-                                        "g-takeover-run",
+                                        ButtonStyle::Ghost,
+                                        Some("g-takeover-run".into()),
                                     )),
                             )
                             // Which of the two rules is answering, on the page —
@@ -1794,11 +1835,14 @@ impl Gallery {
                                         view.details.toggle(running);
                                         cx.notify();
                                     }))
-                                    .child(widgets::collapsible_header(
-                                        &theme,
-                                        if self.running { "Working" } else { "Details" },
-                                        open,
-                                    )),
+                                    .child(
+                                        theme
+                                            .collapsible_header(
+                                                if self.running { "Working" } else { "Details" },
+                                                open,
+                                            )
+                                            .hover(widgets::collapsible_header_hover),
+                                    ),
                             )
                             .when(open, |el| {
                                 el.child(
@@ -1822,21 +1866,18 @@ impl Gallery {
 
             "breadcrumb" => section
                 .child(
-                    widgets::breadcrumb()
-                        .child(widgets::breadcrumb_item(&theme, "crates", false))
-                        .child(widgets::breadcrumb_separator(&theme))
-                        .child(widgets::breadcrumb_item(&theme, "ui", false))
-                        .child(widgets::breadcrumb_separator(&theme))
-                        .child(widgets::breadcrumb_item(&theme, "widgets.rs", true)),
+                    theme
+                        .breadcrumb()
+                        .child(theme.breadcrumb_item("crates", false))
+                        .child(theme.breadcrumb_separator())
+                        .child(theme.breadcrumb_item("ui", false))
+                        .child(theme.breadcrumb_separator())
+                        .child(theme.breadcrumb_item("widgets.rs", true)),
                 )
                 .into_any_element(),
 
             "tag" => section
-                .child(
-                    row()
-                        .child(widgets::tag(&theme, "rust"))
-                        .child(widgets::tag(&theme, "gpui")),
-                )
+                .child(row().child(theme.tag("rust")).child(theme.tag("gpui")))
                 .into_any_element(),
 
             "status-dot" => section
@@ -1861,7 +1902,11 @@ impl Gallery {
                             .tooltip(|window, cx| {
                                 Tooltip::with_keystroke("Copy path", "⌘C", window, cx)
                             })
-                            .child(popover::button(&theme, "Hover me", "g-tip")),
+                            .child(theme.button(
+                                "Hover me",
+                                ButtonStyle::Ghost,
+                                Some("g-tip".into()),
+                            )),
                     ),
                 )
                 .into_any_element(),
@@ -1885,7 +1930,7 @@ impl Gallery {
                                     cx,
                                 )
                             })
-                            .child(widgets::tag(&theme, "@clearloop")),
+                            .child(theme.tag("@clearloop")),
                     ),
                 )
                 .into_any_element(),
@@ -1893,7 +1938,7 @@ impl Gallery {
             "tabs" => section
                 .child(hint(&theme, "space or enter opens the focused tab."))
                 .child(
-                    widgets::tab_bar(&theme).children(
+                    theme.tab_bar().children(
                         ["Components", "Tokens", "Motion"]
                             .into_iter()
                             .enumerate()
@@ -1902,7 +1947,7 @@ impl Gallery {
                                     focus::focusable(
                                         &theme,
                                         &self.tab_strip[index],
-                                        widgets::tab(&theme, label, self.tab_choice == index),
+                                        theme.tab(label, self.tab_choice == index),
                                     ),
                                     SharedString::from(format!("tab-{index}")),
                                     cx,
@@ -1973,13 +2018,10 @@ impl Gallery {
                                 format!("{:.0}%", self.split * 100.0),
                             ))))
                             .child(
-                                widgets::split_handle(
-                                    &theme,
-                                    Axis::Horizontal,
-                                    self.split_dragging,
-                                )
-                                .id("split-handle")
-                                .on_drag(SplitDrag, |_, _, _, cx| cx.new(|_| Empty)),
+                                theme
+                                    .split_handle(Axis::Horizontal, self.split_dragging)
+                                    .id("split-handle")
+                                    .on_drag(SplitDrag, |_, _, _, cx| cx.new(|_| Empty)),
                             )
                             .child(div().flex_1().child(pane("drag the divider".into()))),
                     )
@@ -2007,7 +2049,7 @@ impl Gallery {
                          controls on the left and one on the right still put it \
                          on axis.",
                     ))
-                    .child(widgets::field_label(&theme, "Transport — Shape::Pill"))
+                    .child(theme.field_label("Transport — Shape::Pill"))
                     .child(bezel_ui::control_bar::control_bar(
                         &theme,
                         ControlBarShape::Pill,
@@ -2023,7 +2065,7 @@ impl Gallery {
                     ))
                     // Rounded, not a stadium: a composer is not a media control,
                     // and the stadium reads as one.
-                    .child(widgets::field_label(&theme, "Composer — Shape::Rounded"))
+                    .child(theme.field_label("Composer — Shape::Rounded"))
                     .child(bezel_ui::control_bar::control_bar(
                         &theme,
                         ControlBarShape::Rounded,
@@ -2034,7 +2076,7 @@ impl Gallery {
                             glyph(icons::ARROW_UP).into_any_element(),
                         ],
                     ))
-                    .child(widgets::field_label(&theme, "Floating over content"))
+                    .child(theme.field_label("Floating over content"))
                     // The same striped band the materials page uses, and the only
                     // place either shape's blur can be caught disagreeing with
                     // its border.
@@ -2100,23 +2142,27 @@ impl Gallery {
 
             "group-box" => section
                 .child(
-                    widgets::group_box(&theme)
+                    theme
+                        .group_box()
                         .child(
-                            widgets::card_row(&theme, true)
-                                .child(widgets::row_tile(&theme, icons::MONITOR))
-                                .child(widgets::row_title(&theme, "First row")),
+                            theme
+                                .card_row(true)
+                                .hover(widgets::card_row_hover)
+                                .child(theme.row_tile(icons::MONITOR))
+                                .child(theme.row_title("First row")),
                         )
                         .child(
-                            widgets::card_row(&theme, false)
-                                .child(widgets::row_tile(&theme, icons::FOLDER))
-                                .child(widgets::row_title(&theme, "Second row")),
+                            theme
+                                .card_row(false)
+                                .hover(widgets::card_row_hover)
+                                .child(theme.row_tile(icons::FOLDER))
+                                .child(theme.row_title("Second row")),
                         ),
                 )
                 .into_any_element(),
 
             "empty-state" => section
-                .child(widgets::group_box(&theme).child(widgets::empty_state(
-                    &theme,
+                .child(theme.group_box().child(theme.empty_state(
                     icons::FOLDER,
                     "No repositories",
                     "Open a folder to get started.",
@@ -2192,7 +2238,11 @@ impl Gallery {
                                 view.sheet.open(());
                                 cx.notify();
                             }))
-                            .child(popover::button(&theme, "Open sheet", "g-sheet")),
+                            .child(theme.button(
+                                "Open sheet",
+                                ButtonStyle::Ghost,
+                                Some("g-sheet".into()),
+                            )),
                     ),
                 )
                 .into_any_element(),
@@ -2225,7 +2275,11 @@ impl Gallery {
                                 view.dialog.open(());
                                 cx.notify();
                             }))
-                            .child(popover::button(&theme, "Open dialog", "g-dialog")),
+                            .child(theme.button(
+                                "Open dialog",
+                                ButtonStyle::Ghost,
+                                Some("g-dialog".into()),
+                            )),
                     ),
                 )
                 .into_any_element(),
@@ -2262,8 +2316,8 @@ impl Gallery {
             }
 
             "alerts" => section
-                .child(widgets::error_strip(&theme, "Something went wrong."))
-                .child(widgets::warning_strip(&theme, "Heads up, check this."))
+                .child(theme.error_strip("Something went wrong."))
+                .child(theme.warning_strip("Heads up, check this."))
                 .into_any_element(),
 
             "step-row" => {
@@ -2280,26 +2334,24 @@ impl Gallery {
                     div()
                         .when(!first, |el| el.border_t_1().border_color(theme.border))
                         .child(
-                            widgets::step_row(
-                                &theme,
-                                icon,
-                                title,
-                                Some(SharedString::from(detail)),
-                                Some(SharedString::from(meta)),
-                                failed,
-                                output.map(|_| open),
-                            )
-                            .id(SharedString::from(format!("step-{index}")))
-                            .on_click(cx.listener(
-                                move |view, _, _, cx| {
+                            theme
+                                .step_row(
+                                    icon,
+                                    title,
+                                    Some(SharedString::from(detail)),
+                                    Some(SharedString::from(meta)),
+                                    failed,
+                                    output.map(|_| open),
+                                )
+                                .hover(widgets::step_row_hover)
+                                .id(SharedString::from(format!("step-{index}")))
+                                .on_click(cx.listener(move |view, _, _, cx| {
                                     view.step_open[index] = !view.step_open[index];
                                     cx.notify();
-                                },
-                            )),
+                                })),
                         )
                         .when_some(output.filter(|_| open), |el, output| {
-                            el.child(widgets::step_output(
-                                &theme,
+                            el.child(theme.step_output(
                                 SharedString::from(format!("step-out-{index}")),
                                 output,
                             ))
@@ -2529,7 +2581,11 @@ impl Gallery {
                                     view.log_lines += 1;
                                     cx.notify();
                                 }))
-                                .child(popover::button(&theme, "Append a line", "g-follow-add")),
+                                .child(theme.button(
+                                    "Append a line",
+                                    ButtonStyle::Ghost,
+                                    Some("g-follow-add".into()),
+                                )),
                         )
                         .child(
                             div()
@@ -2538,7 +2594,11 @@ impl Gallery {
                                     view.log_follow.follow();
                                     cx.notify();
                                 }))
-                                .child(popover::button(&theme, "Jump to latest", "g-follow-pin")),
+                                .child(theme.button(
+                                    "Jump to latest",
+                                    ButtonStyle::Ghost,
+                                    Some("g-follow-pin".into()),
+                                )),
                         )
                         // The state, on the page — the same trick the virtualized
                         // list uses for its built count. A behaviour you can only
@@ -2835,6 +2895,9 @@ impl Gallery {
             "agent-diff" => self.diff.clone().into_any_element(),
             "music-player" => self.music.clone().into_any_element(),
             "document" => self.document.clone().into_any_element(),
+            #[cfg(not(target_family = "wasm"))]
+            "agent-terminal" => self.terminal.clone().into_any_element(),
+            "agent-orbs" => self.orbs.clone().into_any_element(),
 
             _ => div().into_any_element(),
         }
@@ -3122,26 +3185,30 @@ fn todo(theme: &Theme, status: &str, summary: &str, work: &[&'static str]) -> An
         )
         .when(!work.is_empty(), |page| {
             page.child(
-                widgets::group_box(theme).children(work.iter().enumerate().map(|(index, step)| {
-                    widgets::card_row(theme, index == 0)
-                        .items_start()
-                        .child(
-                            div()
-                                .flex_none()
-                                .w(px(12.0))
-                                .text_size(px(12.0))
-                                .font_family(theme.font_mono.clone())
-                                .text_color(theme.text_faint)
-                                .child(SharedString::from(format!("{}", index + 1))),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .text_color(theme.text_muted)
-                                .child(SharedString::from(*step)),
-                        )
-                        .into_any_element()
-                })),
+                theme
+                    .group_box()
+                    .children(work.iter().enumerate().map(|(index, step)| {
+                        theme
+                            .card_row(index == 0)
+                            .hover(widgets::card_row_hover)
+                            .items_start()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(12.0))
+                                    .text_size(px(12.0))
+                                    .font_family(theme.font_mono.clone())
+                                    .text_color(theme.text_faint)
+                                    .child(SharedString::from(format!("{}", index + 1))),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .text_color(theme.text_muted)
+                                    .child(SharedString::from(*step)),
+                            )
+                            .into_any_element()
+                    })),
             )
         })
         .into_any_element()
@@ -3154,11 +3221,11 @@ fn todo(theme: &Theme, status: &str, summary: &str, work: &[&'static str]) -> An
 /// control, and two call sites are where a keyboard affordance quietly starts
 /// doing something else than the mouse. Taking the behaviour once removes the
 /// chance.
-fn pressable(
+fn pressable<T: 'static>(
     el: gpui::Div,
     id: impl Into<gpui::ElementId>,
-    cx: &Context<Gallery>,
-    press: impl Fn(&mut Gallery, &mut Context<Gallery>) + Clone + 'static,
+    cx: &Context<T>,
+    press: impl Fn(&mut T, &mut Context<T>) + Clone + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let by_key = press.clone();
     el.id(id)
@@ -3354,7 +3421,11 @@ impl Render for Gallery {
                                         .on_click(
                                             cx.listener(|view, _, _, cx| view.close_dialog(cx)),
                                         )
-                                        .child(popover::button(&theme, "Cancel", "g-dialog-no")),
+                                        .child(theme.button(
+                                            "Cancel",
+                                            ButtonStyle::Ghost,
+                                            Some("g-dialog-no".into()),
+                                        )),
                                 )
                                 .child(
                                     div()
@@ -3362,7 +3433,11 @@ impl Render for Gallery {
                                         .on_click(
                                             cx.listener(|view, _, _, cx| view.close_dialog(cx)),
                                         )
-                                        .child(popover::button_destructive(&theme, "Discard")),
+                                        .child(theme.button(
+                                            "Discard",
+                                            ButtonStyle::Destructive,
+                                            None,
+                                        )),
                                 ),
                         )
                         .into_any_element(),
@@ -3391,7 +3466,11 @@ impl Render for Gallery {
                                         .on_click(
                                             cx.listener(|view, _, _, cx| view.close_sheet(cx)),
                                         )
-                                        .child(popover::button(&theme, "Close", "g-sheet-close")),
+                                        .child(theme.button(
+                                            "Close",
+                                            ButtonStyle::Ghost,
+                                            Some("g-sheet-close".into()),
+                                        )),
                                 ),
                         )
                         .child(popover::dialog_body(
@@ -3400,16 +3479,21 @@ impl Render for Gallery {
                              same glass, full height.",
                         ))
                         .child(
-                            widgets::group_box(&theme)
+                            theme
+                                .group_box()
                                 .child(
-                                    widgets::card_row(&theme, true)
-                                        .child(widgets::row_tile(&theme, icons::MONITOR))
-                                        .child(widgets::row_title(&theme, "Appearance")),
+                                    theme
+                                        .card_row(true)
+                                        .hover(widgets::card_row_hover)
+                                        .child(theme.row_tile(icons::MONITOR))
+                                        .child(theme.row_title("Appearance")),
                                 )
                                 .child(
-                                    widgets::card_row(&theme, false)
-                                        .child(widgets::row_tile(&theme, icons::FOLDER))
-                                        .child(widgets::row_title(&theme, "Storage")),
+                                    theme
+                                        .card_row(false)
+                                        .hover(widgets::card_row_hover)
+                                        .child(theme.row_tile(icons::FOLDER))
+                                        .child(theme.row_title("Storage")),
                                 ),
                         )
                         .into_any_element(),
@@ -3442,76 +3526,5 @@ impl Render for Gallery {
                         ))),
                 )
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn all_sections() -> impl Iterator<Item = &'static Section> {
-        TABS.iter()
-            .flat_map(|tab| tab.groups)
-            .flat_map(|group| group.sections)
-    }
-
-    /// Two rows with the same key would open the same page, and the rail would
-    /// highlight both.
-    #[test]
-    fn rail_keys_are_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for section in all_sections() {
-            assert!(
-                seen.insert(section.key),
-                "duplicate rail key {}",
-                section.key
-            );
-        }
-    }
-
-    /// The header prints a source path as documentation. A moved or renamed
-    /// file turns that into a lie, silently — so check every one resolves.
-    #[test]
-    fn every_section_names_a_file_that_exists() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|apps| apps.parent())
-            .expect("workspace root");
-        for section in all_sections() {
-            let Some(source) = section.source else {
-                continue;
-            };
-            let path = root.join(source);
-            assert!(
-                path.exists(),
-                "{} points at {}, which does not exist",
-                section.key,
-                path.display()
-            );
-        }
-    }
-
-    /// The rail and [`Gallery::section_body`] have to agree on what is unbuilt.
-    /// Both directions bite: a `planned()` row with no arm renders a blank
-    /// page, and a component that gets built but keeps its TODO arm documents
-    /// itself as missing while sitting right there in the crate.
-    ///
-    /// Both sides are empty as of the pagination commit — every row has a
-    /// source. That is the assertion passing, not the assertion being vacuous:
-    /// the day something is planned again, it has to be declared on both sides
-    /// or this fails.
-    #[test]
-    fn planned_rows_and_todo_pages_agree() {
-        let mut rows: Vec<_> = all_sections()
-            .filter(|section| section.source.is_none())
-            .map(|section| section.key)
-            .collect();
-        let mut pages = PLANNED_BODIES.to_vec();
-        rows.sort_unstable();
-        pages.sort_unstable();
-        assert_eq!(
-            rows, pages,
-            "rail rows without a source must match the TODO pages exactly"
-        );
     }
 }

@@ -1,7 +1,7 @@
 //! Table — for rows that are *tuples*.
 //!
 //! Most lists of things in this library are records, and a record reads better
-//! as a card: [`crate::widgets::group_box`] + `card_row` + `row_title` +
+//! as a card: [`group_box`](crate::widgets::Scaffolding::group_box) + `card_row` + `row_title` +
 //! `meta_line` already does that, and does it better than a table would. Reach
 //! for this one only when the third column of every row has to line up, because
 //! reading *down* it is the point.
@@ -227,83 +227,5 @@ fn cell_frame(column: &Column) -> gpui::Div {
             .flex_grow(weight)
             .flex_shrink(1.0)
             .flex_basis(relative(0.0)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_first_click_sorts_ascending() {
-        assert_eq!(
-            next_sort(None, 2),
-            Sort {
-                column: 2,
-                ascending: true
-            }
-        );
-    }
-
-    #[test]
-    fn clicking_the_sorted_column_reverses_it() {
-        let ascending = Sort {
-            column: 1,
-            ascending: true,
-        };
-        let descending = next_sort(Some(ascending), 1);
-        assert_eq!(
-            descending,
-            Sort {
-                column: 1,
-                ascending: false
-            }
-        );
-        assert_eq!(next_sort(Some(descending), 1), ascending, "and back again");
-    }
-
-    #[test]
-    fn another_column_starts_ascending_rather_than_inheriting() {
-        // The case a plain toggle gets wrong: moving to a new column while the
-        // old one was descending would sort the new one descending, which reads
-        // as the table having ignored the click.
-        let descending = Sort {
-            column: 0,
-            ascending: false,
-        };
-        assert_eq!(
-            next_sort(Some(descending), 3),
-            Sort {
-                column: 3,
-                ascending: true
-            }
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "one cell per column")]
-    fn a_row_short_of_cells_is_caught_rather_than_quietly_misaligned() {
-        // Zipping alone would truncate and render a row that looks fine on its
-        // own while sitting under the wrong headings — the exact drift this
-        // module exists to prevent, so the guard is worth having teeth.
-        let theme = bezel_theme::Theme::for_appearance(bezel_theme::Appearance::Dark);
-        let columns = [
-            Column::new("Name", Width::Flex(1.0)),
-            Column::new("Size", Width::Flex(1.0)),
-        ];
-        row(
-            &theme,
-            &columns,
-            true,
-            false,
-            vec![div().into_any_element()],
-        );
-    }
-
-    #[test]
-    fn a_column_is_left_aligned_until_told_otherwise() {
-        let column = Column::new("Name", Width::Flex(1.0));
-        assert_eq!(column.align, Align::Start);
-        assert_eq!(column.align_end().align, Align::End);
     }
 }

@@ -23,10 +23,9 @@
 //! Like the other patterns it is an entity: a screen owns a screen's worth of
 //! state, and its host holds one field.
 
-use bezel_editor::Editor;
-use bezel_markdown::{BlockKind, Doc};
+use bezel_markdown::{BlockKind, Doc, Editor};
 use bezel_theme::Theme;
-use bezel_ui::widgets;
+use bezel_ui::widgets::Controls;
 use gpui::{
     Context, ElementId, Entity, Focusable, Render, ScrollHandle, SharedString, Window, div,
     prelude::*, px,
@@ -35,7 +34,7 @@ use gpui::{
 /// The document on the page. Canonical markdown — `serialize(parse(SOURCE))`
 /// returns it unchanged, which the gallery's tests assert, so the Source
 /// segment can be compared against this by eye.
-const SOURCE: &str = "\
+pub const SOURCE: &str = "\
 # Markdown
 
 Body text with **bold**, _italic_, ~~struck~~, `inline code`, and a \
@@ -171,8 +170,9 @@ impl Render for Document {
             ("Edit", View::Edit),
             ("Source", View::Source),
         ];
-        let toggle = widgets::toggle_group(&theme).children(segments.map(|(label, view)| {
-            widgets::toggle_group_item(&theme, label, self.view == view)
+        let toggle = theme.toggle_group().children(segments.map(|(label, view)| {
+            theme
+                .toggle_group_item(label, self.view == view)
                 .id(ElementId::Name(label.into()))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.view = view;
@@ -211,20 +211,5 @@ impl Render for Document {
                             .child(div().max_w(px(680.0)).child(body)),
                     ),
             )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The Source segment shows `serialize(&doc)` and the page invites you to
-    /// compare it with [`SOURCE`]. If the constant drifts out of canonical form
-    /// the two stop matching, and the screen quietly demonstrates a round trip
-    /// it does not actually survive.
-    #[test]
-    fn the_source_is_canonical() {
-        let doc = bezel_markdown::parse(SOURCE);
-        assert_eq!(bezel_markdown::serialize(&doc), SOURCE);
     }
 }
