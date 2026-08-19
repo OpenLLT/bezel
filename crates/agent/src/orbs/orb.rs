@@ -6,18 +6,13 @@
 //! clock; [`orb_element`] is the same paint one layer down for hosts that
 //! already tick.
 
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use gpui::{
     Bounds, Context, IntoElement, ParentElement, Pixels, Render, Styled, Task, Window, canvas, div,
     px,
 };
-
-use bezel_theme as theme;
+use web_time::Instant;
 
 use crate::orbs::{
     engine::{Frame, draw_mode_into, draw_mode_into_resolved},
@@ -425,10 +420,20 @@ impl Render for Orb {
 /// Paint one frame of an orb at animation time `t` (seconds, unbounded) — the
 /// pure, host-ticked form of [`Orb`]. Build it inside any render that runs on
 /// a clock of its own; the reduced-motion convention is `t = 0.6`.
-pub fn orb_element(state: OrbState, size: OrbSize, t: f32) -> impl IntoElement {
+///
+/// `frame` is the caller's geometry buffer, overwritten here and handed to the
+/// paint closure. Geometry is a function of `t`, so there is nothing to cache
+/// between frames — but a host that keeps one buffer per orb reuses its two
+/// `Vec`s forever instead of growing a pair from empty on every tick.
+pub fn orb_element(
+    state: OrbState,
+    size: OrbSize,
+    t: f32,
+    frame: &Rc<RefCell<Frame>>,
+) -> impl IntoElement {
     let resolved = resolve_preset(state, size);
     let size_px = size.pixels();
-    let frame = Rc::new(RefCell::new(Frame::new()));
+    let frame = frame.clone();
     draw_mode_into(
         resolved.mode,
         size_px,

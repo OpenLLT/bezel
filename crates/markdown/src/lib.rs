@@ -1,9 +1,9 @@
 //! A Notion-style block document model, with markdown as the wire form.
 //!
 //! ```
-//! let doc = bezel_markdown::parse("# Title\n\n- a\n- b");
+//! let doc = markdown::parse("# Title\n\n- a\n- b");
 //! assert_eq!(doc.blocks.len(), 3);
-//! assert_eq!(bezel_markdown::serialize(&doc), "# Title\n\n- a\n- b");
+//! assert_eq!(markdown::serialize(&doc), "# Title\n\n- a\n- b");
 //! ```
 //!
 //! The model is a flat list of blocks with an indent level ([`Doc`]), not a
@@ -22,6 +22,7 @@ pub mod doc;
 pub mod edit;
 #[cfg(feature = "editor")]
 pub mod editor;
+pub mod highlight;
 pub mod parse;
 pub mod render;
 pub mod serialize;
@@ -30,6 +31,7 @@ pub use doc::{Align, Block, BlockKind, Doc, Mark, MarkSpan, Text};
 pub use edit::{Cursor, Shortcut, shortcut};
 #[cfg(feature = "editor")]
 pub use editor::Editor;
+pub use highlight::{Highlighter, set_highlighter};
 pub use parse::parse;
 pub use render::{BlockLayouts, markdown, render, render_with_caret};
 pub use serialize::serialize;

@@ -1,0 +1,22 @@
+[package]
+name = "agent"
+
+description = "Agent-related UI — thinking orbs for working state and deterministic blob avatars for identity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui.workspace = true
+theme.workspace = true
+web-time.workspace = true

@@ -5,10 +5,12 @@
 //! rather than into `crates/`, because the pattern is the code you take.
 
 pub mod agent;
+pub mod avatar;
 pub mod diff;
 pub mod document;
-pub mod music;
 pub mod orbs;
+pub mod samples;
+pub mod syntax;
 #[cfg(not(target_family = "wasm"))]
 pub mod terminal;
 pub mod transcript;

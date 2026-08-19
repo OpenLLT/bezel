@@ -7,19 +7,19 @@
 //!
 //! Ported from zeronsh/comet (MIT) and rebuilt against the flat block model.
 
-use std::cell::RefCell;
-use std::ops::Range;
-use std::rc::Rc;
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
-use bezel_theme::Theme;
 use gpui::{
-    AnyElement, App, BorderStyle, Bounds, ElementId, FontStyle, FontWeight, InteractiveText,
+    AnyElement, App, BorderStyle, Bounds, ElementId, FontStyle, FontWeight, Hsla, InteractiveText,
     Pixels, Point, SharedString, StrikethroughStyle, StyledText, TextLayout, TextRun,
     UnderlineStyle, Window, canvas, div, font, img, point, prelude::*, px, quad, size,
 };
+use theme::Theme;
 
-use crate::doc::{Align, Block, BlockKind, Doc, Mark, Text};
-use crate::edit::Cursor;
+use crate::{
+    doc::{Align, Block, BlockKind, Doc, Mark, Text},
+    edit::Cursor,
+};
 
 /// Space between two ordinary blocks, and the tighter space inside a list.
 const BLOCK_GAP: f32 = 12.0;
@@ -569,23 +569,49 @@ fn code_block(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    // Per line, so the block's height is exactly `lines × line height`. When
-    // syntax highlighting arrives it recolors these runs and layout does not
-    // move — highlight is pure paint.
+    // Per line, so the block's height is exactly `lines × line height`.
+    // Highlighting recolors runs only — layout does not move, so a build with
+    // no highlighter installed paints the same block in one plain run.
+    let spans = crate::highlight::spans(cx, language, code);
     let mono = font(theme.font_mono.clone());
+    let run = |len: usize, color: Hsla| TextRun {
+        len,
+        font: mono.clone(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let mut offset = 0usize;
     let lines: Vec<AnyElement> = code
         .split('\n')
         .map(|line| {
-            let run = TextRun {
-                len: line.len(),
-                font: mono.clone(),
-                color: theme.text,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
+            let start = offset;
+            offset += line.len() + 1;
+            let mut runs = Vec::new();
+            // Runs are measured within the line; spans are byte ranges over the
+            // whole block, so every span is clipped to the line and rebased.
+            let mut pos = 0usize;
+            if let Some(spans) = &spans {
+                let end = start + line.len();
+                for (range, kind) in spans.iter().filter(|(r, _)| r.end > start && r.start < end) {
+                    let s = range.start.clamp(start, end) - start;
+                    let e = range.end.min(end) - start;
+                    if s > pos {
+                        runs.push(run(s - pos, theme.text));
+                    }
+                    runs.push(run(e - s, theme.syntax.color(*kind)));
+                    pos = e;
+                }
+            }
+            if pos < line.len() {
+                runs.push(run(line.len() - pos, theme.text));
+            }
+            if runs.is_empty() {
+                runs.push(run(0, theme.text));
+            }
             StyledText::new(SharedString::from(line.to_string()))
-                .with_runs(vec![run])
+                .with_runs(runs)
                 .into_any_element()
         })
         .collect();

@@ -16,7 +16,9 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-bezel-motion.workspace = true
-bezel-theme.workspace = true
-bezel-ui.workspace = true
+agent.workspace = true
+motion.workspace = true
+syntax.workspace = true
+theme.workspace = true
+ui.workspace = true
 gpui.workspace = true
