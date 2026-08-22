@@ -1,0 +1,30 @@
+[package]
+name = "editor"
+
+description = "A Notion-style block editor for gpui — the editing surface over the markdown document model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+markdown.workspace = true
+theme.workspace = true
+ui.workspace = true
+gpui.workspace = true
+
+# The editing surface is the half that needs a window, so it is the half a pure
+# function cannot reach. `test-support` brings gpui's own harness — a window, a
+# dispatcher, and `simulate_keystrokes` — which is what lets a key press be
+# tested rather than described.
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

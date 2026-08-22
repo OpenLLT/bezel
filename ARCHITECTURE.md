@@ -11,7 +11,8 @@ crates/bezel     the facade               (one dependency, peer namespaces)
 crates/theme     tokens + appearance      (the @Environment layer)
 crates/motion    animation vocabulary     (the Animation/transition layer)
 crates/ui        components               (the View layer)
-crates/markdown  block document model     (markdown in, markdown out; +editor)
+crates/markdown  block document model     (markdown in, markdown out; painted)
+crates/editor    the editing surface       (keys, IME, undo, menus)
 apps/gallery     the documentation — a rail of every component, live
 ```
 
@@ -33,13 +34,24 @@ it type-annotates values from every layer as `bezel::gpui` types, so a split
 graph stops compiling instead of producing a window that paints shapes but no
 text.
 
-It carries **no feature flags yet**. Features were the original reason to
-build it: gating `markdown` (pulldown-cmark), `syntax` (28 tree-sitter
-grammars) and `terminal` (alacritty) so nobody compiles a grammar to get a
-button. Those crates do not exist, and a feature that gates nothing is
-machinery for its own sake — they arrive together. Depending on a single layer
-directly stays supported: the token system alone is useful to anyone writing
-their own gpui components.
+**It carries only the layers every app paints with.** `markdown`, `syntax` and
+`terminal` are peer crates a consumer names itself, and layer gating never
+needed to arrive because each is an *implementation* behind a seam already open:
+`markdown::set_highlighter` takes any `fn(&str, &str) -> Option<Vec<(Range,
+HighlightKind)>>`, so tree-sitter is one answer to highlighting and not the
+answer. Re-exporting `syntax` here made every consumer compile seven C grammars
+to get a button, and made the facade fail outright for
+`wasm32-unknown-unknown` — where that C has no libc, which is the very failure
+`markdown` names no highlighter to avoid. A gate would have hidden that behind a
+default; not carrying the crate removes it.
+
+Its only feature flags are one per bundled face — `geist-sans`, `geist-mono`,
+`geist-weights` — all on by default and forwarded to `ui`: an app that registers
+its own typeface points `Theme::font_sans` at it and drops the Geist it no
+longer paints. `ui` is also the one dependency spelled out rather than
+inherited, because cargo will not let a member clear a workspace dependency's
+default features. Depending on a single layer directly stays supported: the
+token system alone is useful to anyone writing their own gpui components.
 
 ## The markdown model
 
@@ -59,19 +71,40 @@ canonical corpus and 20,000 generated documents. Byte-identical round tripping
 is deliberately *not* promised — a flat model cannot represent arbitrarily
 nested CommonMark, and neither can Notion.
 
-`doc`, `parse`, `serialize` and `edit` are pure — no gpui, no painting. `render`
-is the gpui layer over them: a flat block list means nesting is left padding
-rather than nested containers, and the gap between two blocks is decided by the
-pair, so items of one list sit tight while a new list gets air.
+A position is `(block, part, offset)` — `select::Cursor`. The **part** is a
+coordinate rather than a path, which is what keeps the model flat while a caret
+still reaches inside a code block or a table cell: a block has one kind of part
+and never a mix, so the three fields order lexicographically and a selection is
+just two of them with `min`/`max` deciding which end is which. Every editable
+region is a `Text`, code included, so one accessor and one edit path cover the
+document.
 
-`editor` is the editing **surface** — a focus handle, key bindings, the platform
-input handler, and turning a click into an offset — behind the `editor` feature,
-off by default. It was a `bezel-editor` crate until its manifest said otherwise:
-its dependencies were a strict subset of this crate's, so the boundary isolated
-nothing while cutting one feature in half, with *what an edit does* on one side
-and *which key does it* on the other. The feature gates compile time and API
-surface; it does not lighten the graph, because there is no dependency here that
-a reader does not already carry.
+That ordering is what makes `Doc::replace(Selection, Text)` **the** mutation.
+Typing, backspace, delete, cut and paste are all that call with a different
+argument, so none of them has to know whether the selection was empty, spanned
+two paragraphs, or swallowed a table on the way past. The property test runs it
+over generated documents: an editor that can reach a state its own serializer
+cannot express corrupts the file on save, and no amount of UI polish recovers.
+
+`doc`, `parse`, `serialize`, `select` and `edit` are pure — no gpui, no
+painting. `render` is the gpui layer over them: a flat block list means nesting
+is left padding rather than nested containers, and the gap between two blocks is
+decided by the pair, so items of one list sit tight while a new list gets air.
+
+## The editing surface
+
+`editor` is a focus handle, key bindings, the platform input handler, undo, and
+the menus. The boundary is *what an edit does* against *which key does it*, and
+the dependency graph draws the same line: `ui` is the slash menu's
+`popover::Filter` and `menu_at`, and it stops at this crate — a consumer that
+only paints markdown compiles no popovers.
+
+Its chords are `ui::TextField`'s, because a document is not the place to invent
+a second set, and its rules are that field's too: vertical motion is geometry
+through the painted layouts rather than arithmetic on line numbers, and undo
+coalesces by *adjacency rather than by a pause*, so there is no timing threshold
+to invent. `history` holds whole-document snapshots — a transaction log is the
+machinery collaborative editing needs and nothing here asks for it.
 
 ## Laws
 

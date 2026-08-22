@@ -13,25 +13,31 @@
 //! serializing and parsing again always lands on the same document, so an
 //! edit/save cycle cannot drift.
 //!
-//! [`doc`], [`parse`], [`serialize`] and [`edit`] are pure — no gpui, no painting — and
-//! [`render`] is the gpui layer over them. The editing *surface* — a focus
-//! handle, key bindings and the platform input handler — is [`editor`], behind
-//! the `editor` feature so a read-only consumer compiles none of it.
+//! [`doc`], [`parse`], [`serialize`], [`select`] and [`edit`] are pure — no
+//! gpui, no painting — and [`render`] is the gpui layer over them, caret and
+//! selection included for a caller that owns them. The editing *surface* is the
+//! `editor` crate.
+//!
+//! An image at an `http` URL — a picture, a favicon, a bookmark's cover —
+//! needs an http client on the app, which `gpui_platform::application` installs
+//! and a hand-built [`gpui::Application`] does not. gpui's own default is a
+//! `NullHttpClient`, and the failure is silent: the element paints the same
+//! fallback it would show while a fetch was still in flight.
 
 pub mod doc;
 pub mod edit;
-#[cfg(feature = "editor")]
-pub mod editor;
 pub mod highlight;
 pub mod parse;
+pub mod preview;
 pub mod render;
+pub mod select;
 pub mod serialize;
 
-pub use doc::{Align, Block, BlockKind, Doc, Mark, MarkSpan, Text};
-pub use edit::{Cursor, Shortcut, shortcut};
-#[cfg(feature = "editor")]
-pub use editor::Editor;
-pub use highlight::{Highlighter, set_highlighter};
-pub use parse::parse;
-pub use render::{BlockLayouts, markdown, render, render_with_caret};
+pub use doc::{Align, Block, BlockKind, Doc, Form, Mark, MarkSpan, Part, Text};
+pub use edit::{Shortcut, shortcut};
+pub use highlight::{Highlighter, languages, set_highlighter};
+pub use parse::{is_url, parse};
+pub use preview::{LinkPreview, Preview, set_link_preview};
+pub use render::{BlockLayouts, markdown, render, render_with_selection};
+pub use select::{Cursor, Selection};
 pub use serialize::serialize;

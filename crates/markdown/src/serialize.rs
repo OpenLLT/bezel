@@ -11,7 +11,7 @@
 //! So `#`, `>`, `-` and friends are escaped only at the start of a line, where
 //! they would actually mean something.
 
-use crate::doc::{Align, Block, BlockKind, Doc, Mark, Text};
+use crate::doc::{Align, Block, BlockKind, Doc, Mark, Part, Text};
 
 /// Four spaces per level: enough to sit inside any list marker's content
 /// column (`- ` is 2, `10. ` is 4), and never enough to become an indented
@@ -94,7 +94,10 @@ fn tight_after(previous: &BlockKind, next: &BlockKind, nested: bool) -> bool {
 }
 
 fn is_empty_marker(kind: &BlockKind) -> bool {
-    is_marker(kind) && Block::new(kind.clone()).text().is_some_and(Text::is_empty)
+    is_marker(kind)
+        && Block::new(kind.clone())
+            .text_at(Part::Body)
+            .is_some_and(Text::is_empty)
 }
 
 fn write_block(out: &mut String, kind: &BlockKind, indent: u8) {
@@ -126,11 +129,11 @@ fn write_block(out: &mut String, kind: &BlockKind, indent: u8) {
             write_lines(out, &prefix, &prefix, &inline(text));
         }
         BlockKind::Code { language, code } => {
-            let fence = "`".repeat(fence_width(code));
+            let fence = "`".repeat(fence_width(&code.text));
             out.push_str(&pad);
             out.push_str(&fence);
             out.push_str(language.as_deref().unwrap_or(""));
-            for line in code.split('\n') {
+            for line in code.text.split('\n') {
                 out.push('\n');
                 out.push_str(&pad);
                 out.push_str(line);
@@ -146,6 +149,26 @@ fn write_block(out: &mut String, kind: &BlockKind, indent: u8) {
             out.push_str("](");
             out.push_str(url);
             out.push(')');
+        }
+        // The angles are what makes a line with a link on it into a card, and
+        // they are core CommonMark — every other reader still shows a link
+        // here. The other two forms have no shorthand and say their name.
+        BlockKind::Bookmark { url, form } => {
+            out.push_str(&pad);
+            match form.title() {
+                None => {
+                    out.push('<');
+                    out.push_str(url);
+                    out.push('>');
+                }
+                Some(title) => {
+                    out.push('[');
+                    out.push_str(url);
+                    out.push_str("](");
+                    out.push_str(url);
+                    out.push_str(&format!(" \"{title}\")"));
+                }
+            }
         }
         BlockKind::Table {
             align,
@@ -273,6 +296,35 @@ fn inline(text: &Text) -> String {
                 cursor = cursor.max(span.range.end);
                 continue;
             }
+            // The shorthand is its angles, emitted whole for the same reason a
+            // code span is: the text between them *is* the URL, so there is
+            // nothing inside for another mark to open against. Anything the
+            // angles cannot hold falls through to the explicit spelling, which
+            // is why a mention never has to stop being one.
+            if let Mark::Mention { url, .. } = &span.mark
+                && crate::parse::is_shorthand(text, ix)
+            {
+                out.push('<');
+                out.push_str(url);
+                out.push('>');
+                cursor = cursor.max(span.range.end);
+                continue;
+            }
+            // A link whose text is the URL it points at is written bare, which
+            // is what the linkifier reads back — so a URL in a sentence
+            // survives byte for byte instead of growing brackets it never had.
+            // Only when no other mark touches it: like a code span this is
+            // emitted whole, and a boundary inside it would have nowhere to
+            // land.
+            if let Mark::Link(url) = &span.mark
+                && text.text.get(span.range.clone()) == Some(url.as_str())
+                && crate::parse::is_url(url)
+                && text.alone(ix)
+            {
+                out.push_str(url);
+                cursor = cursor.max(span.range.end);
+                continue;
+            }
             let italic = italic_delimiter(&out, text, &span.range);
             delimiters[ix] = italic;
             open_mark(&mut out, &span.mark, italic);
@@ -332,7 +384,7 @@ fn open_mark(out: &mut String, mark: &Mark, italic: char) {
         Mark::Bold => out.push_str("**"),
         Mark::Italic => out.push(italic),
         Mark::Strike => out.push_str("~~"),
-        Mark::Link(_) => out.push('['),
+        Mark::Link(_) | Mark::Mention { .. } => out.push('['),
         Mark::Image(_) => out.push_str("!["),
         Mark::Code => {}
     }
@@ -347,6 +399,15 @@ fn close_mark(out: &mut String, mark: &Mark, italic: char) {
             out.push_str("](");
             out.push_str(url);
             out.push(')');
+        }
+        // The title names the form. It is the only slot CommonMark leaves for
+        // it, and the shorthand having been ruled out is what got us here.
+        Mark::Mention { url, form } => {
+            out.push_str("](");
+            out.push_str(url);
+            out.push_str(" \"");
+            out.push_str(form.title().unwrap_or("chip"));
+            out.push_str("\")");
         }
         Mark::Code => {}
     }

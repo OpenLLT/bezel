@@ -22,9 +22,10 @@
 //! consecutively. Each of those is a place where writing the document back out
 //! and reading it again would otherwise land somewhere new.
 
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd};
+use std::ops::Range;
 
-use crate::doc::{Align, Block, BlockKind, Doc, Mark, MarkSpan, Text};
+use crate::doc::{Align, Block, BlockKind, Doc, Form, Mark, MarkSpan, Text};
 
 /// Parse a markdown document.
 pub fn parse(source: &str) -> Doc {
@@ -85,10 +86,153 @@ impl TextBuilder {
 
     fn take(&mut self) -> Text {
         self.open.clear();
-        normalize(
+        let mut text = normalize(
             &std::mem::take(&mut self.text),
             &std::mem::take(&mut self.marks),
-        )
+        );
+        settle_mentions(&mut text);
+        linkify(&mut text);
+        text
+    }
+}
+
+/// A mention the shorthand cannot spell says its name instead.
+///
+/// [`Form::Auto`] records that `<url>` was written. Where the angles cannot be
+/// written back — a `mailto:`, a boundary inside a span emitted whole — the
+/// form settles here, so the document already holds what the next parse would
+/// produce. A mention alone in its paragraph passes and stays `Auto`, which is
+/// what leaves it to become a card.
+fn settle_mentions(text: &mut Text) {
+    let settled: Vec<usize> = (0..text.marks.len())
+        .filter(|ix| {
+            matches!(
+                text.marks[*ix].mark,
+                Mark::Mention {
+                    form: Form::Auto,
+                    ..
+                }
+            ) && !is_shorthand(text, *ix)
+        })
+        .collect();
+    for ix in settled {
+        if let Mark::Mention { form, .. } = &mut text.marks[ix].mark {
+            *form = Form::Chip;
+        }
+    }
+}
+
+/// Whether the mark at `ix` can be written with the `<url>` shorthand.
+///
+/// The angles hold a bare URL and nothing else, so a mention has to *be* its
+/// URL: `<mailto:x>` is an autolink this cannot spell that way, and
+/// `**<https://x>**` has a boundary inside a span that is written whole and so
+/// has nowhere to put it. Everything that fails here still has the explicit
+/// spelling to fall back on, which is why nothing ever has to stop being a
+/// mention.
+pub(crate) fn is_shorthand(text: &Text, ix: usize) -> bool {
+    let span = &text.marks[ix];
+    let Mark::Mention { url, form } = &span.mark else {
+        return false;
+    };
+    *form == Form::Auto
+        && text.text.get(span.range.clone()) == Some(url.as_str())
+        && is_url(url)
+        && text.alone(ix)
+}
+
+/// The schemes a bare URL may carry. Narrow on purpose: a scheme and no
+/// whitespace. Anything cleverer starts linking text that merely contains a dot.
+const SCHEMES: [&str; 2] = ["https://", "http://"];
+
+/// Every bare URL in `text`, as byte ranges.
+///
+/// One scan answers two questions that have to agree: what [`linkify`] marks,
+/// and what [`crate::serialize`] may write without brackets. Split them and the
+/// round trip drifts the first time the two disagree about a trailing bracket.
+pub(crate) fn urls(text: &str) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < text.len() {
+        let Some((start, scheme)) = SCHEMES
+            .iter()
+            .filter_map(|scheme| text[at..].find(scheme).map(|ix| (at + ix, *scheme)))
+            .min_by_key(|(ix, _)| *ix)
+        else {
+            break;
+        };
+        let stop = text[start..]
+            .find(char::is_whitespace)
+            .map_or(text.len(), |ix| start + ix);
+        let end = start + trim_url(&text[start..stop]);
+        // A scheme mid-word belongs to the word, and a scheme with no host
+        // behind it is not a URL.
+        let opens = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        if opens && end > start + scheme.len() {
+            found.push(start..end);
+        }
+        at = stop.max(start + 1);
+    }
+    found
+}
+
+/// Whether `source` is exactly one bare URL, and nothing else.
+///
+/// The question an editor asks of a paste, and the one [`crate::serialize`]
+/// asks before writing a link bare — the same question, so it is one function.
+pub fn is_url(source: &str) -> bool {
+    matches!(urls(source).as_slice(), [only] if *only == (0..source.len()))
+}
+
+/// How much of a run the URL is. Closing punctuation belongs to the sentence,
+/// and a bracket only belongs to the URL when the URL opened it.
+fn trim_url(run: &str) -> usize {
+    let mut end = run.len();
+    while let Some(last) = run[..end].chars().next_back() {
+        let keep = match last {
+            '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' => false,
+            ')' => run[..end].matches('(').count() >= run[..end].matches(')').count(),
+            ']' => run[..end].matches('[').count() >= run[..end].matches(']').count(),
+            _ => true,
+        };
+        if keep {
+            break;
+        }
+        end -= last.len_utf8();
+    }
+    end
+}
+
+/// Mark the bare URLs in a run.
+///
+/// CommonMark links `<http://x>` and nothing else, so a URL typed on its own
+/// arrives as text. Marking it here is what lets a reader click it, what lets
+/// [`crate::serialize`] write it back without brackets, and what makes a URL
+/// alone in a block a [`BlockKind::Bookmark`].
+fn linkify(text: &mut Text) {
+    let fresh: Vec<Range<usize>> = urls(&text.text)
+        .into_iter()
+        .filter(|range| {
+            // A URL already inside a link, an image target or a code span is
+            // spelled by that mark, not by this one.
+            !text.marks.iter().any(|span| {
+                matches!(
+                    span.mark,
+                    Mark::Link(_) | Mark::Mention { .. } | Mark::Image(_) | Mark::Code
+                ) && span.range.start < range.end
+                    && range.start < span.range.end
+            })
+        })
+        .collect();
+    for range in fresh {
+        let url = text.text[range.clone()].to_string();
+        text.marks.push(MarkSpan {
+            range,
+            mark: Mark::Link(url),
+        });
     }
 }
 
@@ -166,7 +310,7 @@ fn merge_same_mark(mut marks: Vec<MarkSpan>) -> Vec<MarkSpan> {
         for other in ix + 1..marks.len() {
             let (a, b) = (&marks[ix], &marks[other]);
             if a.mark == b.mark
-                && !matches!(a.mark, Mark::Image(_))
+                && !matches!(a.mark, Mark::Image(_) | Mark::Mention { .. })
                 && a.range.start <= b.range.end
                 && b.range.start <= a.range.end
             {
@@ -315,6 +459,38 @@ impl ParseState {
             return;
         }
 
+        // A paragraph that is nothing but a mention is a bookmark — the same
+        // `<https://x>` that paints as a chip inside a sentence, given a line
+        // of its own. A bare URL is what someone types when they mean a link
+        // and `[Title](url)` is what a sentence spells, so carding either would
+        // leave no way to write a link that stays one — and it is the paste
+        // menu's `Dismiss` that has to write that down.
+        //
+        // A chip promotes too: off the text flow it can be a real element, and
+        // that is the only place a favicon has room to sit.
+        //
+        // The text has to *be* the URL. `[Example Site](url "chip")` alone on a
+        // line keeps its title and stays a paragraph, because promoting it
+        // would drop words someone wrote — a block shows only what the preview
+        // gave it.
+        if let [
+            MarkSpan {
+                range,
+                mark: Mark::Mention { url, form },
+            },
+        ] = text.marks.as_slice()
+            && range.start == 0
+            && range.end == text.text.len()
+            && text.text == *url
+            && is_url(url)
+        {
+            let (url, form) = (url.clone(), *form);
+            self.flush_marker();
+            let indent = self.indent();
+            self.push(BlockKind::Bookmark { url, form }, indent);
+            return;
+        }
+
         if self.quote_depth > 0 {
             // The bullet comes first so the quote reads as its child rather
             // than replacing it.
@@ -431,8 +607,24 @@ impl ParseState {
             Tag::Strikethrough => {
                 self.builder.open(Mark::Strike);
             }
-            Tag::Link { dest_url, .. } => {
-                self.builder.open(Mark::Link(dest_url.into_string()));
+            // A rich link is its own mark rather than a flag on a link: where
+            // the spelling came from is what decides the painting, and a flag
+            // beside the mark is a second place for that to be recorded.
+            Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                ..
+            } => {
+                let url = dest_url.into_string();
+                let form = match link_type {
+                    LinkType::Autolink => Some(Form::Auto),
+                    _ => Form::from_title(&title),
+                };
+                self.builder.open(match form {
+                    Some(form) => Mark::Mention { url, form },
+                    None => Mark::Link(url),
+                });
             }
             Tag::Image { dest_url, .. } => {
                 self.builder.open(Mark::Image(dest_url.into_string()));
@@ -464,7 +656,13 @@ impl ParseState {
                     // The fence swallows the final newline; storing it would
                     // grow the block by one blank line on every round trip.
                     let code = code.strip_suffix('\n').map_or(code.clone(), str::to_string);
-                    self.push(BlockKind::Code { language, code }, indent);
+                    self.push(
+                        BlockKind::Code {
+                            language,
+                            code: Text::plain(code),
+                        },
+                        indent,
+                    );
                 }
             }
             TagEnd::List(_) => {

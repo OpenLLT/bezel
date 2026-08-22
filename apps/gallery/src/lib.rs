@@ -10,7 +10,6 @@ use gpui::{
     AnyElement, App, Axis, Context, DragMoveEvent, Empty, Entity, KeyBinding, SharedString, Window,
     actions, div, prelude::*, px, relative,
 };
-use markdown::editor;
 use std::{cell::Cell, collections::HashSet, rc::Rc};
 use theme::{
     Theme,
@@ -39,7 +38,10 @@ use ui::{
     },
 };
 
-actions!(gallery, [OpenPalette, ToggleInspector, ToggleFullScreen]);
+actions!(
+    gallery,
+    [OpenPalette, ToggleInspector, ToggleFullScreen, CloseOverlay]
+);
 
 /// Every keymap this view needs, in one call.
 ///
@@ -48,7 +50,8 @@ actions!(gallery, [OpenPalette, ToggleInspector, ToggleFullScreen]);
 /// bindings were installed natively and missing on the web, so typing worked in
 /// the browser and Backspace did not.
 pub fn init(cx: &mut App) {
-    markdown::set_highlighter(cx, highlight::spans);
+    markdown::set_highlighter(cx, highlight::spans, highlight::languages());
+    markdown::set_link_preview(cx, preview::of);
     input::init(cx);
     editor::init(cx);
     palette::init(cx);
@@ -59,7 +62,12 @@ pub fn init(cx: &mut App) {
     tree::init(cx);
     // A pattern is an app: the composer page binds its own keys.
     patterns::agent::init(cx);
-    cx.bind_keys([KeyBinding::new("cmd-k", OpenPalette, None)]);
+    cx.bind_keys([
+        KeyBinding::new("cmd-k", OpenPalette, None),
+        // Scoped to this page's context, so it never shadows the escape a
+        // menu, a combobox or the document editor binds inside its own.
+        KeyBinding::new("escape", CloseOverlay, Some("Gallery")),
+    ]);
 }
 
 pub mod highlight;
@@ -69,6 +77,7 @@ pub mod highlight;
 pub mod inspector;
 
 pub mod patterns;
+pub mod preview;
 
 pub const LANGUAGES: [&str; 8] = [
     "Rust",
@@ -380,7 +389,7 @@ pub const TABS: &[Tab] = &[
     Tab {
         title: "Patterns",
         groups: PATTERNS,
-        home: "agent-activity",
+        home: "agent-avatar",
         full_bleed: true,
     },
 ];
@@ -445,6 +454,7 @@ pub const PATTERNS: &[Group] = &[
                 "Document",
                 "apps/gallery/src/patterns/document.rs",
             ),
+            section("editor", "Editor", "apps/gallery/src/patterns/editor.rs"),
             section("syntax", "Syntax", "apps/gallery/src/patterns/syntax.rs"),
         ],
     },
@@ -719,6 +729,7 @@ pub struct Gallery {
     transcript: Entity<patterns::transcript::Transcript>,
     diff: Entity<patterns::diff::Diff>,
     document: Entity<patterns::document::Document>,
+    editor: Entity<patterns::editor::EditorDemo>,
     #[cfg(not(target_family = "wasm"))]
     terminal: Entity<patterns::terminal::Terminal>,
     orbs: Entity<patterns::orbs::Orbs>,
@@ -841,11 +852,7 @@ impl Gallery {
             level: 0.5,
             tab_choice: 0,
             tab: 2,
-            selected: TABS
-                .iter()
-                .enumerate()
-                .map(|(i, tab)| if i == 2 { "agent-diff" } else { tab.home })
-                .collect(),
+            selected: TABS.iter().map(|tab| tab.home).collect(),
             dialog: popover::Popup::default(),
             activity: cx.new(|_| patterns::agent::Activity::default()),
             tool_calls: cx.new(|_| patterns::agent::ToolCalls::default()),
@@ -853,6 +860,7 @@ impl Gallery {
             transcript: cx.new(|_| patterns::transcript::Transcript::default()),
             diff: cx.new(|_| patterns::diff::Diff),
             document: cx.new(patterns::document::Document::new),
+            editor: cx.new(patterns::editor::EditorDemo::new),
             #[cfg(not(target_family = "wasm"))]
             terminal: cx.new(patterns::terminal::Terminal::new),
             orbs: cx.new(patterns::orbs::Orbs::new),
@@ -862,16 +870,23 @@ impl Gallery {
         }
     }
 
-    /// One section, alone, for a website page that documents it. Falls back to
-    /// the whole browser when the key is not in the catalog, so a stale link
-    /// lands somewhere useful instead of on an empty pane.
-    pub fn embedded(key: &str, cx: &mut Context<Self>) -> Self {
+    /// The browser, opened on one section — `cargo run -p gallery -- editor`.
+    /// Falls back to the default page when the key is not in the catalog, so a
+    /// stale link lands somewhere useful instead of on an empty pane.
+    pub fn showing(key: &str, cx: &mut Context<Self>) -> Self {
         let mut gallery = Self::new(cx);
         if let Some(tab) = tab_of(key) {
             gallery.tab = tab;
             gallery.selected[tab] = section_at(key).expect("tab_of matched").key;
-            gallery.embedded = true;
         }
+        gallery
+    }
+
+    /// That section *alone*, for a website page that documents it — no rail, no
+    /// tabs, just the pane.
+    pub fn embedded(key: &str, cx: &mut Context<Self>) -> Self {
+        let mut gallery = Self::showing(key, cx);
+        gallery.embedded = tab_of(key).is_some();
         gallery
     }
 
@@ -1024,11 +1039,24 @@ impl Gallery {
         cx.notify();
     }
 
+    /// Straight off, because `popover::modal` has no exit to play — unlike the
+    /// sheet and the context menu, it takes no `closing` and paints the same
+    /// whether or not one has begun.
     fn close_dialog(&mut self, cx: &mut Context<Self>) {
-        if self.dialog.begin_close() {
-            popover::reap_popup(cx, |view: &mut Self| &mut view.dialog);
-        }
+        self.dialog.close();
         cx.notify();
+    }
+
+    /// Escape, on whatever is floating over the page.
+    ///
+    /// `popover::modal` and `popover::sheet` are paint, not entities — they
+    /// hold no state and so can bind no key. The state is the caller's
+    /// `Popup`, which makes backing out of one the caller's too, and every
+    /// overlay this page can open answers here.
+    fn close_overlay(&mut self, _: &CloseOverlay, _: &mut Window, cx: &mut Context<Self>) {
+        self.close_dialog(cx);
+        self.close_sheet(cx);
+        self.close_context_menu(cx);
     }
 
     fn close_sheet(&mut self, cx: &mut Context<Self>) {
@@ -2921,6 +2949,7 @@ impl Gallery {
             "agent-transcript" => self.transcript.clone().into_any_element(),
             "agent-diff" => self.diff.clone().into_any_element(),
             "document" => self.document.clone().into_any_element(),
+            "editor" => self.editor.clone().into_any_element(),
             #[cfg(not(target_family = "wasm"))]
             "agent-terminal" => self.terminal.clone().into_any_element(),
             "agent-orbs" => self.orbs.clone().into_any_element(),
@@ -3374,6 +3403,7 @@ impl Render for Gallery {
             .on_action(cx.listener(Self::open_palette))
             .on_action(cx.listener(Self::toggle_inspector))
             .on_action(cx.listener(Self::toggle_full_screen))
+            .on_action(cx.listener(Self::close_overlay))
             .on_mouse_down(
                 gpui::MouseButton::Right,
                 cx.listener(|view, event: &gpui::MouseDownEvent, _, cx| {

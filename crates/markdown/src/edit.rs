@@ -25,7 +25,10 @@
 
 use std::ops::Range;
 
-use crate::doc::{Block, BlockKind, Doc, Mark, MarkSpan, Text};
+use crate::{
+    doc::{Block, BlockKind, Doc, Mark, MarkSpan, Part, Text},
+    select::{Cursor, Selection},
+};
 
 impl Text {
     /// Insert at a byte offset, moving the marks with it.
@@ -263,7 +266,7 @@ impl Text {
                 if a.mark == b.mark
                     && a.range.start <= b.range.end
                     && b.range.start <= a.range.end
-                    && !matches!(a.mark, Mark::Image(_))
+                    && !matches!(a.mark, Mark::Image(_) | Mark::Mention { .. })
                 {
                     merged = Some((
                         other,
@@ -326,16 +329,12 @@ impl Doc {
             return ix;
         }
         let indent = self.blocks[ix].indent;
-        let tail = match &mut self.blocks[ix].kind {
-            BlockKind::Paragraph(text)
-            | BlockKind::Heading { text, .. }
-            | BlockKind::Bullet(text)
-            | BlockKind::Ordered { text, .. }
-            | BlockKind::Task { text, .. }
-            | BlockKind::Quote(text) => text.split_off(at),
-            // Nothing to cut — Enter after an atomic block opens a paragraph.
-            _ => Text::default(),
-        };
+        // Nothing to cut for a block with no body — Enter after an atomic
+        // block opens a paragraph.
+        let tail = self.blocks[ix]
+            .text_at_mut(Part::Body)
+            .map(|text| text.split_off(at))
+            .unwrap_or_default();
         let kind = match &self.blocks[ix].kind {
             BlockKind::Bullet(_) => BlockKind::Bullet(tail),
             BlockKind::Ordered { .. } => BlockKind::Ordered {
@@ -355,67 +354,542 @@ impl Doc {
         ix + 1
     }
 
-    /// Backspace at the start of block `ix`.
+    /// Backspace at the start of a block.
     ///
-    /// Notion's chain, in order: an indented block outdents, a list item
-    /// becomes a paragraph, and only a plain block at the left margin merges
-    /// into the one above it. Returns the caret's new byte offset in whichever
-    /// block now holds it, and `None` when nothing moved.
-    pub fn merge_back(&mut self, ix: usize) -> Option<usize> {
-        let indent = self.blocks.get(ix)?.indent;
-        if indent > 0 {
-            self.outdent(ix);
-            return Some(0);
-        }
-        if is_marker(&self.blocks[ix].kind) {
-            let text = self.blocks[ix].text().cloned().unwrap_or_default();
-            self.blocks[ix].kind = BlockKind::Paragraph(text);
-            self.repair();
-            return Some(0);
-        }
-        if ix == 0 {
+    /// Notion's chain, in order: an indented block outdents, a block wearing
+    /// syntax around its text gives the syntax up, and only a plain block at
+    /// the left margin merges into the one above it. When that one holds no
+    /// body there is nothing to merge into, so the caret steps into a fence or
+    /// a table, and a rule or an image — which no caret can enter, and so no
+    /// other key can remove — goes. Returns where the caret landed, and `None`
+    /// when nothing moved.
+    ///
+    /// A table cell is not a position that can swallow its neighbour, so
+    /// backspace at the start of one does nothing rather than eating the table.
+    pub fn merge_back(&mut self, at: Cursor) -> Option<Cursor> {
+        if matches!(at.part, Part::Cell { .. }) {
             return None;
         }
-        // Only two blocks that both hold text can become one.
-        let tail = self.blocks[ix].text()?.clone();
-        let caret = self.blocks[ix - 1].text()?.text.len();
-        match &mut self.blocks[ix - 1].kind {
-            BlockKind::Paragraph(head)
-            | BlockKind::Heading { text: head, .. }
-            | BlockKind::Bullet(head)
-            | BlockKind::Ordered { text: head, .. }
-            | BlockKind::Task { text: head, .. }
-            | BlockKind::Quote(head) => head.append(tail),
-            _ => return None,
+        let block = self.blocks.get(at.block)?;
+        if block.indent > 0 {
+            self.outdent(at.block);
+            return Some(Cursor::new(at.block, at.part, 0));
         }
-        self.blocks.remove(ix);
-        self.repair();
-        Some(caret)
+        // Every prefix [`shortcut`] reads is chrome around text; the first
+        // backspace takes the chrome and leaves the text where it was, so what
+        // can be typed in can be typed out.
+        let unwrapped = match &block.kind {
+            kind if is_marker(kind) => block.text_at(Part::Body).cloned(),
+            BlockKind::Heading { text, .. } | BlockKind::Quote(text) => Some(text.clone()),
+            BlockKind::Code { code, .. } => Some(code.clone()),
+            _ => None,
+        };
+        if let Some(text) = unwrapped {
+            self.blocks[at.block].kind = BlockKind::Paragraph(text);
+            self.repair();
+            return Some(Cursor::new(at.block, Part::Body, 0));
+        }
+        if at.block == 0 {
+            return None;
+        }
+        let tail = self.blocks[at.block].text_at(Part::Body)?.clone();
+        let previous = at.block - 1;
+        match self.blocks[previous].parts().last().copied() {
+            // Only two blocks that both hold a body can become one.
+            Some(Part::Body) => {
+                let head = self.blocks[previous].text_at_mut(Part::Body)?;
+                let caret = head.text.len();
+                head.append(tail);
+                self.blocks.remove(at.block);
+                self.repair();
+                Some(Cursor::new(previous, Part::Body, caret))
+            }
+            Some(part) => {
+                let end = self.blocks[previous]
+                    .text_at(part)
+                    .map_or(0, |text| text.text.len());
+                Some(Cursor::new(previous, part, end))
+            }
+            None => {
+                self.blocks.remove(previous);
+                self.repair();
+                Some(Cursor::new(previous, at.part, at.offset))
+            }
+        }
     }
 
-    /// Apply an edit to block `ix`'s text, then put the block back in order.
+    /// Apply an edit to the text at `at`, then put the block back in order.
     ///
     /// The editor should reach text through here rather than mutating a block
-    /// directly: a heading that acquires a newline has no ATX spelling, and
-    /// nothing else is positioned to notice.
-    pub fn edit_text(&mut self, ix: usize, edit: impl FnOnce(&mut Text)) {
+    /// directly: a heading or a table cell that acquires a newline has no
+    /// spelling, and nothing else is positioned to notice.
+    pub fn edit_at(&mut self, at: Cursor, edit: impl FnOnce(&mut Text)) {
+        let Some(block) = self.blocks.get_mut(at.block) else {
+            return;
+        };
+        let one_line =
+            matches!(block.kind, BlockKind::Heading { .. }) || matches!(at.part, Part::Cell { .. });
+        let Some(text) = block.text_at_mut(at.part) else {
+            return;
+        };
+        edit(text);
+        if one_line {
+            crate::parse::collapse_to_one_line(text);
+        }
+    }
+
+    /// The blocks nested under `ix`, `ix` included — what a move, a duplicate
+    /// or a drag carries with it.
+    ///
+    /// A flat list makes this a scan for the next block that is not deeper,
+    /// which is the whole argument for the flat list.
+    pub fn subtree(&self, ix: usize) -> Range<usize> {
+        let Some(base) = self.blocks.get(ix).map(|block| block.indent) else {
+            return ix..ix;
+        };
+        let mut end = ix + 1;
+        while self
+            .blocks
+            .get(end)
+            .is_some_and(|block| block.indent > base)
+        {
+            end += 1;
+        }
+        ix..end
+    }
+
+    /// Move a block and its children to sit before or after their neighbour.
+    ///
+    /// `delta` counts *siblings*, not rows: moving down past a bullet with
+    /// three children clears all four, or a block would land inside the run it
+    /// was trying to step over.
+    pub fn move_block(&mut self, ix: usize, delta: isize) -> Option<usize> {
+        let span = self.subtree(ix);
+        if span.is_empty() {
+            return None;
+        }
+        let to = match delta {
+            ..0 => {
+                // The start of whichever subtree ends where this one begins.
+                (0..span.start)
+                    .rev()
+                    .find(|&above| self.subtree(above).end == span.start)?
+            }
+            0.. => {
+                let next = self.subtree(span.end);
+                if next.is_empty() {
+                    return None;
+                }
+                // Landing after the neighbour means landing where it ends,
+                // less the hole this subtree leaves behind.
+                next.end - span.len()
+            }
+        };
+        let moved: Vec<Block> = self.blocks.drain(span.clone()).collect();
+        self.blocks.splice(to..to, moved);
+        self.repair();
+        Some(to)
+    }
+
+    /// Copy a block and its children in below themselves.
+    pub fn duplicate(&mut self, ix: usize) -> Option<usize> {
+        let span = self.subtree(ix);
+        if span.is_empty() {
+            return None;
+        }
+        let copy: Vec<Block> = self.blocks[span.clone()].to_vec();
+        self.blocks.splice(span.end..span.end, copy);
+        self.repair();
+        Some(span.end)
+    }
+
+    /// Delete a block and its children.
+    pub fn remove_block(&mut self, ix: usize) {
+        let span = self.subtree(ix);
+        if span.is_empty() {
+            return;
+        }
+        self.blocks.drain(span);
+        self.repair();
+    }
+
+    /// Turn block `ix` into `kind`, carrying its text across and keeping its
+    /// indent.
+    ///
+    /// The one operation a typed prefix, the slash menu and the block menu all
+    /// perform, so none of them reaches into a block's kind on its own.
+    pub fn set_kind(&mut self, ix: usize, kind: BlockKind) {
         let Some(block) = self.blocks.get_mut(ix) else {
             return;
         };
-        let heading = matches!(block.kind, BlockKind::Heading { .. });
-        let text = match &mut block.kind {
-            BlockKind::Paragraph(text)
-            | BlockKind::Heading { text, .. }
-            | BlockKind::Bullet(text)
-            | BlockKind::Ordered { text, .. }
-            | BlockKind::Task { text, .. }
-            | BlockKind::Quote(text) => text,
-            _ => return,
+        let text = match &block.kind {
+            // A bookmark's text is the link it shows, so turning one back into
+            // prose hands the URL over instead of an empty block.
+            BlockKind::Bookmark { url, .. } => Text::link(url),
+            _ => block.text_at(Part::Body).cloned().unwrap_or_default(),
         };
-        edit(text);
-        if heading {
-            crate::parse::collapse_to_one_line(text);
+        block.kind = kind;
+        match block.text_at_mut(Part::Body) {
+            Some(body) => *body = text,
+            // Code is the one kind whose text is not a body, and the one the
+            // marks cannot come with.
+            None => {
+                if let BlockKind::Code { code, .. } = &mut block.kind {
+                    *code = Text::plain(text.text);
+                }
+            }
         }
+        self.repair();
+    }
+
+    /// The tag on a fenced block — what the label shows, what the highlighter
+    /// reads, and what the info string carries. Not [`Doc::set_kind`]'s job:
+    /// that carries a *body* across, and a fence has none to give back.
+    pub fn set_language(&mut self, ix: usize, language: Option<String>) {
+        if let Some(BlockKind::Code { language: tag, .. }) =
+            self.blocks.get_mut(ix).map(|block| &mut block.kind)
+        {
+            *tag = language;
+        }
+    }
+
+    /// Turn what a selection covers into one code block, leaving whatever it
+    /// did not cover as blocks of its own.
+    ///
+    /// The fence is what markdown has for code over more than one line. An
+    /// inline span is not: no CommonMark spelling puts a line break inside
+    /// backticks, so one written that way comes back as a space.
+    ///
+    /// Marks are dropped on the way in, the way [`Doc::set_kind`] drops them
+    /// when it turns a block into a fence — code is literal to its closing
+    /// fence, and nothing in it is markup.
+    pub fn fence(&mut self, selection: Selection) -> Cursor {
+        let lines: Vec<String> = self
+            .spans(selection)
+            .iter()
+            .filter(|(at, _)| at.part == Part::Body)
+            .filter_map(|(at, range)| {
+                let text = self.blocks[at.block].text_at(at.part)?;
+                text.text.get(range.clone()).map(str::to_string)
+            })
+            .collect();
+        if lines.is_empty() {
+            return selection.head.clamp(self);
+        }
+        let code = Text::plain(lines.join("\n"));
+
+        // Cutting the selection leaves the head and the tail it did not cover
+        // joined in one block, with the caret at the seam between them — which
+        // is where the fence goes.
+        let at = self.replace(selection, Text::default());
+        let tail = self.split(at.block, at.offset);
+        let indent = self.blocks[at.block].indent;
+        self.blocks.insert(
+            tail,
+            Block::at(
+                BlockKind::Code {
+                    language: None,
+                    code,
+                },
+                indent,
+            ),
+        );
+        // A selection that covered whole blocks leaves nothing on either side,
+        // and an empty paragraph is not what "turn this into code" asked for.
+        let empty = |block: &Block| {
+            block
+                .text_at(Part::Body)
+                .is_some_and(|text| text.text.is_empty())
+        };
+        if self.blocks.get(tail + 1).is_some_and(empty) {
+            self.blocks.remove(tail + 1);
+        }
+        let mut fence = tail;
+        if empty(&self.blocks[at.block]) {
+            self.blocks.remove(at.block);
+            fence -= 1;
+        }
+        self.repair();
+        Cursor::new(fence, Part::Code, 0).clamp(self)
+    }
+
+    /// The way back out of a fence: every line becomes a paragraph. `None` when
+    /// the selection is not all code, which is what makes this the other half
+    /// of a toggle rather than an operation of its own.
+    pub fn unfence(&mut self, selection: Selection) -> Option<Cursor> {
+        let (start, end) = selection.clamp(self).ordered();
+        let blocks = start.block..=end.block;
+        if !blocks
+            .clone()
+            .all(|ix| matches!(self.blocks[ix].kind, BlockKind::Code { .. }))
+        {
+            return None;
+        }
+        for ix in blocks.rev() {
+            let BlockKind::Code { code, .. } = &self.blocks[ix].kind else {
+                continue;
+            };
+            let indent = self.blocks[ix].indent;
+            let paragraphs: Vec<Block> = code
+                .text
+                .split('\n')
+                .map(|line| Block::at(BlockKind::Paragraph(Text::plain(line)), indent))
+                .collect();
+            self.blocks.splice(ix..=ix, paragraphs);
+        }
+        self.repair();
+        Some(Cursor::new(start.block, Part::Body, 0).clamp(self))
+    }
+
+    /// Every text a selection touches, with the slice of it covered.
+    ///
+    /// One selection can reach across paragraphs and table cells, and a mark
+    /// applies to each of them separately — marks live inside a [`Text`] and
+    /// have no way to span two.
+    pub fn spans(&self, selection: Selection) -> Vec<(Cursor, Range<usize>)> {
+        let (start, end) = selection.clamp(self).ordered();
+        let (first, last) = (
+            Cursor::new(start.block, start.part, 0),
+            Cursor::new(end.block, end.part, 0),
+        );
+        let mut out = Vec::new();
+        for block in start.block..=end.block.min(self.blocks.len().saturating_sub(1)) {
+            for part in self.blocks[block].parts() {
+                let here = Cursor::new(block, part, 0);
+                if here < first || here > last {
+                    continue;
+                }
+                let len = here.len_in(self).unwrap_or(0);
+                let from = if here == first { start.offset } else { 0 };
+                let to = if here == last { end.offset } else { len };
+                if from < to.min(len) {
+                    out.push((here, from..to.min(len)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Add `mark` over a selection, or take it away if every part of the
+    /// selection already carries it.
+    ///
+    /// The decision is made across the whole selection before anything moves:
+    /// dragging over a bold word and a plain one and pressing cmd-B should bold
+    /// the rest rather than unbolding the half that was already there.
+    pub fn toggle_mark(&mut self, selection: Selection, mark: Mark) {
+        let spans = self.spans(selection);
+        let remove = self.covered_by(selection, &mark);
+
+        for (at, range) in spans {
+            // Code is literal to its closing fence; nothing in it is markup.
+            if at.part == Part::Code {
+                continue;
+            }
+            if remove == self.carries(&at, &range, &mark) {
+                let mark = mark.clone();
+                self.edit_at(at, |text| text.toggle(range, mark));
+            }
+        }
+    }
+
+    /// Whether every part of a selection already carries `mark` — what decides
+    /// between adding it and taking it away, and what a toolbar button reads to
+    /// know whether it is lit.
+    pub fn covered_by(&self, selection: Selection, mark: &Mark) -> bool {
+        let spans = self.spans(selection);
+        !spans.is_empty()
+            && spans
+                .iter()
+                .all(|(at, range)| at.part == Part::Code || self.carries(at, range, mark))
+    }
+
+    fn carries(&self, at: &Cursor, range: &Range<usize>, mark: &Mark) -> bool {
+        self.blocks[at.block]
+            .text_at(at.part)
+            .is_some_and(|text| text.covered_by(range, mark))
+    }
+
+    /// The sub-document a selection covers — what a copy puts on the clipboard.
+    ///
+    /// A table is atomic here for the same reason it is in [`Doc::replace`]:
+    /// half a table has no shape worth keeping, so a selection reaching into
+    /// one takes it whole.
+    pub fn slice(&self, selection: Selection) -> Doc {
+        let (start, end) = selection.clamp(self).ordered();
+        let mut out = Doc {
+            blocks: self.blocks[start.block..=end.block].to_vec(),
+        };
+        let last = end.block - start.block;
+        // Tail first: trimming the head would move the offsets the tail is in.
+        if !matches!(end.part, Part::Cell { .. })
+            && let Some(text) = out.blocks[last].text_at_mut(end.part)
+        {
+            text.split_off(end.offset);
+        }
+        if !matches!(start.part, Part::Cell { .. })
+            && let Some(text) = out.blocks[0].text_at_mut(start.part)
+        {
+            *text = text.split_off(start.offset);
+        }
+        // The slice starts at the left margin whatever depth it was cut from.
+        out.repair();
+        out
+    }
+
+    /// Replace a selection with a whole document — the paste path.
+    ///
+    /// A lone paragraph goes in as inline text, marks and all: pasting a
+    /// sentence into a sentence must not make a new block. Anything else
+    /// arrives as blocks, and the remainder of the caret's block follows them.
+    pub fn splice(&mut self, selection: Selection, other: Doc) -> Cursor {
+        let blocks = other.blocks;
+        let inline = match blocks.as_slice() {
+            [] => Some(Text::default()),
+            [block] => match &block.kind {
+                BlockKind::Paragraph(text) => Some(text.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(text) = inline {
+            return self.replace(selection, text);
+        }
+
+        let caret = self.replace(selection, Text::default());
+        let base = self.blocks[caret.block].indent;
+        // Split so what followed the caret follows the paste too. An empty
+        // remainder is the blank block a paste at the end would leave behind.
+        let tail = self.split(caret.block, caret.offset);
+        let empty_tail = self.blocks[tail]
+            .text_at(Part::Body)
+            .is_some_and(Text::is_empty);
+
+        let mut at = caret.block;
+        for block in blocks {
+            at += 1;
+            self.blocks
+                .insert(at, Block::at(block.kind, base.saturating_add(block.indent)));
+        }
+        if empty_tail {
+            self.blocks.remove(at + 1);
+        }
+        // And the block the caret opened in, if the paste displaced all of it.
+        let head_empty = self.blocks[caret.block]
+            .text_at(Part::Body)
+            .is_some_and(Text::is_empty);
+        if head_empty && matches!(self.blocks[caret.block].kind, BlockKind::Paragraph(_)) {
+            self.blocks.remove(caret.block);
+            at -= 1;
+        }
+        self.repair();
+        Cursor::new(at, Part::Body, 0).end(self).clamp(self)
+    }
+
+    /// Replace everything a selection covers with `text`, and say where the
+    /// caret lands.
+    ///
+    /// **The one mutation.** Typing, backspace, delete, cut and paste are all
+    /// this call with a different argument, which is why none of them needs to
+    /// know whether a selection was empty, spanned two paragraphs, or swallowed
+    /// a table on the way past.
+    pub fn replace(&mut self, selection: Selection, text: Text) -> Cursor {
+        // An empty document has no block to put anything in; editing one opens
+        // the paragraph every other path then assumes exists.
+        if self.blocks.is_empty() {
+            self.blocks
+                .push(Block::new(BlockKind::Paragraph(Text::default())));
+        }
+        let (start, end) = selection.clamp(self).ordered();
+
+        // Code is literal, so marks arriving from a paste have nowhere to go.
+        let text = if start.part == Part::Code {
+            Text::plain(text.text)
+        } else {
+            text
+        };
+
+        if start.block == end.block && start.part == end.part {
+            let at = start.offset + text.text.len();
+            self.edit_at(start, |body| {
+                body.remove(start.offset..end.offset);
+                body.insert(start.offset, &text.text);
+                for span in &text.marks {
+                    body.marks.push(MarkSpan {
+                        range: start.offset + span.range.start..start.offset + span.range.end,
+                        mark: span.mark.clone(),
+                    });
+                }
+                body.normalize_marks();
+            });
+            return Cursor {
+                offset: at,
+                ..start
+            }
+            .clamp(self);
+        }
+
+        // Across cells of one table the table itself survives: the covered
+        // cells are emptied and the shape stays, which is what a spreadsheet
+        // selection does and what keeps the columns from collapsing.
+        if start.block == end.block {
+            for part in self.blocks[start.block].parts() {
+                if part < start.part || part > end.part {
+                    continue;
+                }
+                // `remove` clamps, so the open end needs no length.
+                let (from, to) = (
+                    if part == start.part { start.offset } else { 0 },
+                    if part == end.part {
+                        end.offset
+                    } else {
+                        usize::MAX
+                    },
+                );
+                self.edit_at(Cursor::new(start.block, part, 0), |body| {
+                    body.remove(from..to)
+                });
+            }
+            return self.replace(Selection::at(start), text);
+        }
+
+        // Across blocks the head keeps its kind and takes the tail's
+        // remainder, and everything between them goes.
+        //
+        // A **table is atomic** to a selection that leaves it. Half a table has
+        // no shape worth keeping, so an end landing in one takes the whole
+        // block rather than splicing a lone cell into a paragraph.
+        let head_keeps = !matches!(start.part, Part::Cell { .. })
+            && self.blocks[start.block].text_at(start.part).is_some();
+        let tail = match end.part {
+            Part::Cell { .. } => Text::default(),
+            part => self.blocks[end.block]
+                .text_at_mut(part)
+                .map(|body| body.split_off(end.offset))
+                .unwrap_or_default(),
+        };
+
+        let indent = self.blocks[start.block].indent;
+        let first = if head_keeps {
+            start.block + 1
+        } else {
+            start.block
+        };
+        self.blocks.drain(first..=end.block);
+
+        let caret = if head_keeps {
+            self.edit_at(start, |body| body.remove(start.offset..usize::MAX));
+            self.edit_at(start, |body| body.append(tail));
+            start
+        } else {
+            // Everything the selection touched is gone, so the tail arrives as
+            // a paragraph in its place.
+            self.blocks
+                .insert(start.block, Block::at(BlockKind::Paragraph(tail), indent));
+            Cursor::new(start.block, Part::Body, 0)
+        };
+        self.repair();
+        let caret = caret.clamp(self);
+        self.replace(Selection::at(caret), text)
     }
 
     /// Put the document into the form markdown can hold — the save step.
@@ -447,7 +921,10 @@ impl Doc {
                         crate::parse::collapse_to_one_line(cell);
                     }
                 }
-                BlockKind::Code { .. } | BlockKind::Image { .. } | BlockKind::Rule => {}
+                BlockKind::Code { .. }
+                | BlockKind::Image { .. }
+                | BlockKind::Bookmark { .. }
+                | BlockKind::Rule => {}
             }
         }
         // A blank paragraph is the empty line an editor leaves behind, and
@@ -540,16 +1017,8 @@ impl Doc {
     /// with the parent or the document invariant breaks the moment a level
     /// disappears from under them.
     fn shift_subtree(&mut self, ix: usize, by: i8) {
-        let base = self.blocks[ix].indent;
-        let mut end = ix + 1;
-        while self
-            .blocks
-            .get(end)
-            .is_some_and(|block| block.indent > base)
-        {
-            end += 1;
-        }
-        for block in &mut self.blocks[ix..end] {
+        let span = self.subtree(ix);
+        for block in &mut self.blocks[span] {
             block.indent = block.indent.saturating_add_signed(by);
         }
     }
@@ -583,9 +1052,11 @@ impl Shortcut {
             Self::Ordered => BlockKind::Ordered { number: 1, text },
             Self::Task(checked) => BlockKind::Task { checked, text },
             Self::Quote => BlockKind::Quote(text),
+            // Code is literal, so whatever marks the text carried have no
+            // meaning inside the fence.
             Self::Code => BlockKind::Code {
                 language: None,
-                code: text.text,
+                code: Text::plain(text.text),
             },
             Self::Rule => BlockKind::Rule,
         }
@@ -622,144 +1093,50 @@ pub fn shortcut(text: &str) -> Option<(Shortcut, usize)> {
         .map(|(prefix, shortcut)| (*shortcut, prefix.len()))
 }
 
-/// A caret: which block, and how far into its text.
+/// A closing inline delimiter just typed, and the run it closes.
 ///
-/// Byte offsets, like the marks — and like them, always on a character
-/// boundary. It lives here rather than in the editor crate because a position
-/// in a document is part of the document model: the pure half can move it,
-/// which is what makes the motion testable without a window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Cursor {
-    pub block: usize,
-    pub offset: usize,
-}
-
-impl Cursor {
-    pub fn new(block: usize, offset: usize) -> Self {
-        Self { block, offset }
-    }
-
-    /// How much text block `ix` holds, or `None` if it holds none at all —
-    /// code, images, rules and tables are atomic to a caret.
-    fn len_of(doc: &Doc, ix: usize) -> Option<usize> {
-        doc.blocks.get(ix)?.text().map(|text| text.text.len())
-    }
-
-    /// Pull the caret back onto a real position: a block that exists, an offset
-    /// inside it, and a character boundary.
-    pub fn clamp(self, doc: &Doc) -> Self {
-        if doc.blocks.is_empty() {
-            return Self::default();
-        }
-        let block = self.block.min(doc.blocks.len() - 1);
-        let Some(len) = Self::len_of(doc, block) else {
-            return Self { block, offset: 0 };
+/// The inline half of the same vocabulary [`shortcut`] covers: typing the last
+/// `*` of `**bold**` makes it bold because pasting `**bold**` would have.
+/// Returns the opening delimiter's range and the text between it and the caret;
+/// the closing delimiter is `inner.end..caret`.
+pub fn inline_rule(text: &str, caret: usize) -> Option<(Range<usize>, Range<usize>, Mark)> {
+    let head = text.get(..caret)?;
+    // Longest first — `**` is bold, and only what is left of it is italic.
+    for (delimiter, mark) in [
+        ("**", Mark::Bold),
+        ("~~", Mark::Strike),
+        ("`", Mark::Code),
+        ("_", Mark::Italic),
+        ("*", Mark::Italic),
+    ] {
+        let Some(closes) = head.strip_suffix(delimiter) else {
+            continue;
         };
-        let mut offset = self.offset.min(len);
-        if let Some(text) = doc.blocks[block].text() {
-            while offset > 0 && !text.text.is_char_boundary(offset) {
-                offset -= 1;
-            }
+        let Some(open) = closes.rfind(delimiter) else {
+            continue;
+        };
+        let inner = open + delimiter.len()..closes.len();
+        let Some(body) = text.get(inner.clone()).filter(|body| !body.is_empty()) else {
+            continue;
+        };
+        // Emphasis cannot open or close against whitespace, so a mark reaching
+        // over one has no spelling and [`Text::normalize_marks`] would shrink
+        // it straight back off. A rule that fires and vanishes is worse than
+        // one that does not fire.
+        if body.starts_with(char::is_whitespace) || body.ends_with(char::is_whitespace) {
+            continue;
         }
-        Self { block, offset }
-    }
-
-    /// The nearest block at or after `from` that a caret can sit in.
-    fn next_editable(doc: &Doc, from: usize) -> Option<usize> {
-        (from..doc.blocks.len()).find(|ix| Self::len_of(doc, *ix).is_some())
-    }
-
-    /// The nearest block at or before `from` that a caret can sit in.
-    fn previous_editable(doc: &Doc, from: usize) -> Option<usize> {
-        (0..=from.min(doc.blocks.len().saturating_sub(1)))
-            .rev()
-            .find(|ix| Self::len_of(doc, *ix).is_some())
-    }
-
-    /// One character left, stepping into the block above at the start of a line.
-    pub fn left(self, doc: &Doc) -> Self {
-        let here = self.clamp(doc);
-        if here.offset > 0 {
-            let text = &doc.blocks[here.block].text().expect("clamped").text;
-            let mut offset = here.offset - 1;
-            while offset > 0 && !text.is_char_boundary(offset) {
-                offset -= 1;
-            }
-            return Self { offset, ..here };
-        }
-        match here
-            .block
-            .checked_sub(1)
-            .and_then(|ix| Self::previous_editable(doc, ix))
+        // An underscore inside a word is not emphasis in CommonMark, which is
+        // the only reason `snake_case_names` survive being typed.
+        if delimiter == "_"
+            && text[..open]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
         {
-            Some(block) => Self {
-                block,
-                offset: Self::len_of(doc, block).unwrap_or(0),
-            },
-            None => here,
+            continue;
         }
+        return Some((open..open + delimiter.len(), inner, mark));
     }
-
-    /// One character right, stepping into the block below at the end of a line.
-    pub fn right(self, doc: &Doc) -> Self {
-        let here = self.clamp(doc);
-        let len = Self::len_of(doc, here.block).unwrap_or(0);
-        if here.offset < len {
-            let text = &doc.blocks[here.block].text().expect("clamped").text;
-            let mut offset = here.offset + 1;
-            while offset < len && !text.is_char_boundary(offset) {
-                offset += 1;
-            }
-            return Self { offset, ..here };
-        }
-        match Self::next_editable(doc, here.block + 1) {
-            Some(block) => Self { block, offset: 0 },
-            None => here,
-        }
-    }
-
-    /// The block above, keeping the offset where it fits.
-    pub fn up(self, doc: &Doc) -> Self {
-        let here = self.clamp(doc);
-        match here
-            .block
-            .checked_sub(1)
-            .and_then(|ix| Self::previous_editable(doc, ix))
-        {
-            Some(block) => Self {
-                block,
-                offset: here.offset,
-            }
-            .clamp(doc),
-            None => Self { offset: 0, ..here },
-        }
-    }
-
-    /// The block below, keeping the offset where it fits.
-    pub fn down(self, doc: &Doc) -> Self {
-        let here = self.clamp(doc);
-        match Self::next_editable(doc, here.block + 1) {
-            Some(block) => Self {
-                block,
-                offset: here.offset,
-            }
-            .clamp(doc),
-            None => Self {
-                offset: Self::len_of(doc, here.block).unwrap_or(0),
-                ..here
-            },
-        }
-    }
-
-    pub fn home(self) -> Self {
-        Self { offset: 0, ..self }
-    }
-
-    pub fn end(self, doc: &Doc) -> Self {
-        let here = self.clamp(doc);
-        Self {
-            offset: Self::len_of(doc, here.block).unwrap_or(0),
-            ..here
-        }
-    }
+    None
 }

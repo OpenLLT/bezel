@@ -72,28 +72,101 @@ impl Block {
         Self { kind, indent }
     }
 
-    /// The block's editable inline content, if it has any. `None` for the
-    /// blocks an editor treats as atomic (code, images, rules) and for tables,
-    /// whose cells are edited individually.
-    pub fn text(&self) -> Option<&Text> {
+    /// One of the block's editable texts. `None` when the block has no such
+    /// part — every block is atomic to some [`Part`], and images, bookmarks and
+    /// rules are atomic to all of them.
+    pub fn text_at(&self, part: Part) -> Option<&Text> {
+        match (&self.kind, part) {
+            (
+                BlockKind::Paragraph(text)
+                | BlockKind::Heading { text, .. }
+                | BlockKind::Bullet(text)
+                | BlockKind::Ordered { text, .. }
+                | BlockKind::Task { text, .. }
+                | BlockKind::Quote(text),
+                Part::Body,
+            ) => Some(text),
+            (BlockKind::Code { code, .. }, Part::Code) => Some(code),
+            (BlockKind::Table { header, .. }, Part::Cell { row: 0, column }) => header.get(column),
+            (BlockKind::Table { rows, .. }, Part::Cell { row, column }) => {
+                rows.get(row - 1)?.get(column)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn text_at_mut(&mut self, part: Part) -> Option<&mut Text> {
+        match (&mut self.kind, part) {
+            (
+                BlockKind::Paragraph(text)
+                | BlockKind::Heading { text, .. }
+                | BlockKind::Bullet(text)
+                | BlockKind::Ordered { text, .. }
+                | BlockKind::Task { text, .. }
+                | BlockKind::Quote(text),
+                Part::Body,
+            ) => Some(text),
+            (BlockKind::Code { code, .. }, Part::Code) => Some(code),
+            (BlockKind::Table { header, .. }, Part::Cell { row: 0, column }) => {
+                header.get_mut(column)
+            }
+            (BlockKind::Table { rows, .. }, Part::Cell { row, column }) => {
+                rows.get_mut(row - 1)?.get_mut(column)
+            }
+            _ => None,
+        }
+    }
+
+    /// Every part a caret can sit in, in document order.
+    pub fn parts(&self) -> Vec<Part> {
         match &self.kind {
-            BlockKind::Paragraph(text)
-            | BlockKind::Heading { text, .. }
-            | BlockKind::Bullet(text)
-            | BlockKind::Ordered { text, .. }
-            | BlockKind::Task { text, .. }
-            | BlockKind::Quote(text) => Some(text),
-            BlockKind::Code { .. }
-            | BlockKind::Image { .. }
-            | BlockKind::Table { .. }
-            | BlockKind::Rule => None,
+            BlockKind::Paragraph(_)
+            | BlockKind::Heading { .. }
+            | BlockKind::Bullet(_)
+            | BlockKind::Ordered { .. }
+            | BlockKind::Task { .. }
+            | BlockKind::Quote(_) => vec![Part::Body],
+            BlockKind::Code { .. } => vec![Part::Code],
+            BlockKind::Table { header, rows, .. } => {
+                let mut parts = Vec::new();
+                if !header.is_empty() {
+                    parts.extend((0..header.len()).map(|column| Part::Cell { row: 0, column }));
+                }
+                for (ix, row) in rows.iter().enumerate() {
+                    parts.extend((0..row.len()).map(|column| Part::Cell {
+                        row: ix + 1,
+                        column,
+                    }));
+                }
+                parts
+            }
+            BlockKind::Image { .. } | BlockKind::Bookmark { .. } | BlockKind::Rule => Vec::new(),
         }
     }
 }
 
-/// The block vocabulary. Closed by design — it is exactly what the slash menu
-/// offers, and a consumer that needs a block of its own is a reason to widen
-/// this enum rather than to grow an extension system.
+/// Which of a block's texts a caret sits in.
+///
+/// A block has one kind of part and never a mix — prose blocks have a body, a
+/// code block has its code, a table has cells — so this is a coordinate rather
+/// than a path, and the model stays flat. The ordering is document order, which
+/// is what makes a [`crate::Cursor`] comparable and therefore what makes a
+/// selection a range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Part {
+    #[default]
+    Body,
+    Code,
+    /// Row 0 is the header row; row `n` is `rows[n - 1]`.
+    Cell {
+        row: usize,
+        column: usize,
+    },
+}
+
+/// The block vocabulary. Closed by design — a consumer that needs a block of
+/// its own is a reason to widen this enum rather than to grow an extension
+/// system.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockKind {
     Paragraph(Text),
@@ -114,13 +187,28 @@ pub enum BlockKind {
         text: Text,
     },
     Quote(Text),
+    /// The code carries a [`Text`] like every other editable region, so one
+    /// accessor and one edit path cover the whole document. Its marks are
+    /// unreachable rather than forbidden: nothing that writes here creates one.
     Code {
         language: Option<String>,
-        code: String,
+        code: Text,
     },
     Image {
         url: String,
         alt: String,
+    },
+    /// A link with a block to itself, painted richly. Atomic on purpose:
+    /// everything it shows past the URL comes from [`crate::preview`], so there
+    /// is nothing here for a caret to edit.
+    ///
+    /// [`Form`] picks which of the three — a chip, a card, or a card with its
+    /// picture across the width. Off a line of its own the same link is a
+    /// [`Mark::Mention`], which is the same three minus what shaped text cannot
+    /// hold.
+    Bookmark {
+        url: String,
+        form: Form,
     },
     Table {
         align: Vec<Align>,
@@ -166,8 +254,32 @@ impl Text {
         }
     }
 
+    /// A URL that links to itself — what a pasted link is, and what a bookmark
+    /// hands back when it turns into prose.
+    pub fn link(url: &str) -> Self {
+        Self {
+            text: url.to_string(),
+            marks: vec![MarkSpan {
+                range: 0..url.len(),
+                mark: Mark::Link(url.to_string()),
+            }],
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    /// Whether no other mark overlaps the one at `ix`.
+    ///
+    /// A mark written whole — a code span, a mention — leaves no room inside
+    /// itself for another mark's boundary, so this is what decides whether it
+    /// can be spelled its own way at all.
+    pub(crate) fn alone(&self, ix: usize) -> bool {
+        let span = &self.marks[ix].range;
+        self.marks.iter().enumerate().all(|(other, mark)| {
+            other == ix || mark.range.end <= span.start || mark.range.start >= span.end
+        })
     }
 }
 
@@ -177,6 +289,42 @@ pub struct MarkSpan {
     pub mark: Mark,
 }
 
+/// How a [`Mark::Mention`] was written down, which is also how it paints.
+///
+/// `Auto` is the shorthand `<https://x>`: a chip in a sentence, a card on a
+/// line of its own. It is a variant rather than a resolved form because the
+/// spelling is what has to survive the round trip — resolve it at parse and
+/// every `<url>` grows brackets the first time the file is saved.
+///
+/// The other two are CommonMark's title slot, `[url](url "chip")`, which is
+/// core, ignored by every other renderer, and the only place left to say what
+/// the shorthand cannot: a chip alone on a line, and the bigger card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    Auto,
+    Chip,
+    Embed,
+}
+
+impl Form {
+    /// The title that spells this form, and `None` for the shorthand.
+    pub(crate) fn title(self) -> Option<&'static str> {
+        match self {
+            Self::Auto => None,
+            Self::Chip => Some("chip"),
+            Self::Embed => Some("embed"),
+        }
+    }
+
+    pub(crate) fn from_title(title: &str) -> Option<Self> {
+        match title {
+            "chip" => Some(Self::Chip),
+            "embed" => Some(Self::Embed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mark {
     Bold,
@@ -184,6 +332,16 @@ pub enum Mark {
     Strike,
     Code,
     Link(String),
+    /// A link painted richly rather than as underlined text — a chip inline, a
+    /// [`BlockKind::Bookmark`] with a block to itself.
+    ///
+    /// The chip shows the URL, because a [`Text`] is one string and every caret
+    /// offset is a byte into it: an inline atom painted wider or narrower than
+    /// the text under it has nowhere to put the offsets in between.
+    Mention {
+        url: String,
+        form: Form,
+    },
     /// An image among text. [`BlockKind::Image`] is the shape an editor offers;
     /// this is what keeps `see ![x](u) here` from silently becoming a link when
     /// the document is saved.
