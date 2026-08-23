@@ -68,6 +68,10 @@
 	});
 </script>
 
+<svelte:head>
+	<link rel="alternate" type="text/plain" href="{base}/llms.txt" title="Documentation for LLMs" />
+</svelte:head>
+
 <header>
 	<a class="wordmark" href="{base}/">bezel</a>
 
@@ -182,5 +186,25 @@
 	header a:hover {
 		color: var(--text);
 		text-decoration: none;
+	}
+
+	@media (max-width: 720px) {
+		header {
+			gap: 16px;
+			padding: 0 16px;
+		}
+
+		/* The tabs never fit beside the wordmark on a phone, and `min-width: 0`
+		   lets them spill over the button on the right rather than clip. Scroll
+		   the row instead, so every tab stays reachable. */
+		.nav {
+			gap: 16px;
+			overflow-x: auto;
+			scrollbar-width: none;
+		}
+
+		.nav::-webkit-scrollbar {
+			display: none;
+		}
 	}
 </style>

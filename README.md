@@ -1,5 +1,9 @@
 # bezel
 
+[![crates.io](https://img.shields.io/crates/v/bezel.svg?style=flat-square)](https://crates.io/crates/bezel)
+[![license](https://img.shields.io/crates/l/bezel.svg?style=flat-square)](LICENSE)
+[![gpui](https://img.shields.io/crates/v/bezel-gpui.svg?style=flat-square&label=gpui)](https://crates.io/crates/bezel-gpui)
+
 A gpui component library, SwiftUI-lean: style flows through the environment,
 never through parameters.
 
@@ -8,6 +12,24 @@ https://github.com/user-attachments/assets/6b5f16d0-9f58-48d6-8398-09acb1afa402
 ```rust
 use bezel::ui::widgets::{ButtonStyle, Buttons};
 theme.button("Save", ButtonStyle::Prominent, None)
+```
+
+## Install
+
+```toml
+[dependencies]
+bezel = "0.1"
+```
+
+An app also names the two crates the facade cannot cover — `gpui` because
+`actions!` expands to literal `gpui::` paths, and `gpui_platform` because the
+facade re-exports gpui but not the platform. Both are our fork of gpui,
+published under `bezel-gpui*`; the `package` key keeps the `gpui::` paths the
+macros and gpui's own docs expect:
+
+```toml
+gpui = { package = "bezel-gpui", version = "0.3" }
+gpui_platform = { package = "bezel-gpui-platform", version = "0.3", features = ["font-kit"] }
 ```
 
 ## Theme
@@ -37,12 +59,8 @@ if bezel::motion::hover_fades_active() {
 ## Build an app
 
 `apps/hello` is the smallest consumer — one window, a button, a toggle.
-Every gpui *type* path goes through `bezel::gpui`, so a crates.io gpui cannot
-creep into the graph; the two dependencies beyond that are both from the same
-fork rev: `gpui` (for `actions!`, which expands to literal `gpui::` paths)
-and `gpui_platform` (the facade re-exports gpui but not the platform, and
-this gpui has no `Application::new()`). The bootstrap, which is the part no
-snippet can skip:
+Every gpui *type* path goes through `bezel::gpui`, so a second gpui cannot
+creep into the graph. The bootstrap, which is the part no snippet can skip:
 
 ```rust
 use bezel::gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -79,11 +97,15 @@ fn main() {
 
 ## Provenance
 
-The initial components were extracted from [comet][comet](MIT).
-The thinking orbs were ported from [gpui-thinking-orbs][gpui-thinking-orbs] (MIT).
-The blob avatars were ported from [blobatar][blobatar] (MIT).
-Syntax highlighting: tree-sitter core and grammars (MIT), TypeScript/TSX queries from [nvim-treesitter][nvim-treesitter] (Apache-2.0).
-Bundled assets: Solar Icons by480 Design (CC BY 4.0), Geist and Geist Mono © Vercel Inc. (SIL OFL 1.1).
+| What                   | From                               | License     |
+| ---------------------- | ---------------------------------- | ----------- |
+| Initial components     | [comet]                            | MIT         |
+| Thinking orbs          | [gpui-thinking-orbs]               | MIT         |
+| Blob avatars           | [blobatar]                         | MIT         |
+| Syntax highlighting    | tree-sitter core and grammars      | MIT         |
+| TypeScript/TSX queries | [nvim-treesitter]                  | Apache-2.0  |
+| Icons                  | Solar Icons by 480 Design          | CC BY 4.0   |
+| Fonts                  | Geist and Geist Mono © Vercel Inc. | SIL OFL 1.1 |
 
 [gpui]: https://github.com/zed-industries/gpui
 [comet]: https://github.com/zeronsh/comet

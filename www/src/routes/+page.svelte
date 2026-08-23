@@ -5,14 +5,11 @@
 	import Ascii from '$lib/Ascii.svelte';
 	import Brand from '$lib/Brand.svelte';
 	import Gallery from '$lib/Gallery.svelte';
-	import { docsHome, repo } from '$lib/catalog.js';
+	import { docsHome, repo, tagline as description } from '$lib/catalog.js';
 
 	let expanded = $state(false);
 
 	const author = 'https://x.com/tianyi_gc';
-
-	// Search only — the page itself does not repeat it.
-	const description = 'Design tokens, motion, and materials for native Rust apps, built on gpui.';
 
 	// What the library is, in its own terms — README and ARCHITECTURE already
 	// argue these. Reasons to use it, not a list of what is in the box.
@@ -70,12 +67,11 @@
 	<div class="say">
 		<h1>Build the app, not the buttons.</h1>
 
-		<!-- One dependency, and no `[patch.crates-io]` to repeat: `bezel` re-exports
-		     the gpui it was built against, so a consumer cannot end up with a second
-		     copy in the graph. -->
+		<!-- One dependency: `bezel` re-exports the gpui it was built against, so a
+		     consumer cannot end up with a second copy in the graph. -->
 		<div class="install code-block">
 			<span class="file">Cargo.toml</span>
-			<code>bezel = &#123; git = "https://github.com/crabtalk/bezel" &#125;</code>
+			<code>bezel = "0.1"</code>
 			<button class="copy" type="button" aria-label="Copy">
 				<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 				{@html Copy}{@html Check}
@@ -154,6 +150,13 @@
 		max-width: 1180px;
 		margin: 0 auto;
 		padding: 112px 40px 56px;
+	}
+
+	/* The install line below is a scroll container, but a grid item still sizes to
+	   its min-content — without this the column takes the unbreakable code line's
+	   width and the whole page scrolls sideways on a phone. */
+	.say {
+		min-width: 0;
 	}
 
 	.act {
