@@ -88,6 +88,25 @@ const TABLE_MIN_COLUMN_CONTENT: f32 = 48.0;
 /// Narrowest a column wraps down to before the table scrolls instead.
 const TABLE_MIN_COLUMN_WIDTH: f32 = 96.0;
 
+/// What an image's one authored string is doing on the page.
+///
+/// SwiftUI keeps three things apart — `accessibilityLabel` for a reader that
+/// cannot see, `.help` for the pointer, and a caption you compose out of a
+/// `Text` under the picture. Markdown has one slot for all three, so this says
+/// which of them it is playing here rather than in the document, where it is
+/// the same string either way.
+///
+/// A named choice rather than a `bool`, so a surface that wants a third answer
+/// gets a variant instead of a second flag.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Caption {
+    /// Under the picture, where a caret can sit in it. The editor's shape.
+    #[default]
+    Shown,
+    /// Kept by the document and painted nowhere — a picture on its own.
+    Hidden,
+}
+
 /// Where each block's text landed, recorded as it painted.
 ///
 /// A caret has to be placeable by pointer, and only paint knows where a glyph
@@ -106,6 +125,10 @@ struct Frames {
     /// A fenced block's language label, which a host may want to hang a
     /// picker on.
     languages: Vec<(usize, Bounds<Pixels>)>,
+    /// An image block's picture, which is not its block: the block runs the
+    /// full column and carries the caption, and a resize handle belongs on the
+    /// edge of the picture itself.
+    pictures: Vec<(usize, Bounds<Pixels>)>,
 }
 
 /// One shaped run and the slice of its part it covers.
@@ -284,6 +307,19 @@ impl BlockLayouts {
             .map(|(_, bounds)| *bounds)
     }
 
+    /// Where an image block's picture painted, which
+    /// [`BlockLayouts::block_bounds`] does not give: that box spans the column
+    /// and takes in the caption, so a handle placed from it sits off the edge
+    /// of any picture narrower than the page.
+    pub fn picture_bounds(&self, ix: usize) -> Option<Bounds<Pixels>> {
+        self.0
+            .borrow()
+            .pictures
+            .iter()
+            .find(|(block, _)| *block == ix)
+            .map(|(_, bounds)| *bounds)
+    }
+
     fn record(&self, block: usize, part: Part, range: Range<usize>, layout: TextLayout) {
         self.0.borrow_mut().texts.push(Painted {
             block,
@@ -301,11 +337,16 @@ impl BlockLayouts {
         self.0.borrow_mut().languages.push((ix, bounds));
     }
 
+    fn record_picture(&self, ix: usize, bounds: Bounds<Pixels>) {
+        self.0.borrow_mut().pictures.push((ix, bounds));
+    }
+
     fn clear(&self) {
         let mut frames = self.0.borrow_mut();
         frames.texts.clear();
         frames.blocks.clear();
         frames.languages.clear();
+        frames.pictures.clear();
     }
 }
 
@@ -323,6 +364,7 @@ struct Overlay<'a> {
     /// Shown on the caret's block while it holds nothing. The renderer is the
     /// only thing that knows where that text sits, so the string comes to it.
     placeholder: Option<&'a SharedString>,
+    caption: Caption,
 }
 
 impl<'a> Overlay<'a> {
@@ -380,12 +422,12 @@ impl<'a> Overlay<'a> {
 
 /// Parse and render in one step — the common case for read-only content.
 pub fn markdown(source: &str, window: &mut Window, cx: &mut App) -> AnyElement {
-    render(&crate::parse(source), window, cx)
+    render(&crate::parse(source), Caption::default(), window, cx)
 }
 
 /// Render a document.
-pub fn render(doc: &Doc, window: &mut Window, cx: &mut App) -> AnyElement {
-    render_with_selection(doc, None, None, None, window, cx)
+pub fn render(doc: &Doc, caption: Caption, window: &mut Window, cx: &mut App) -> AnyElement {
+    render_with_selection(doc, None, None, None, caption, window, cx)
 }
 
 /// Render a document with a caret and a selection in it.
@@ -400,6 +442,7 @@ pub fn render_with_selection(
     selection: Option<Selection>,
     layouts: Option<&BlockLayouts>,
     placeholder: Option<SharedString>,
+    caption: Caption,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -431,6 +474,7 @@ pub fn render_with_selection(
             selection,
             layouts,
             placeholder: placeholder.as_ref(),
+            caption,
         };
         // The block's own box, recorded for a gutter handle and a drop target.
         // A rule and an image hold no text, so a layout would not find them.
@@ -535,7 +579,7 @@ fn block_element(
             window,
             cx,
         ),
-        BlockKind::Image { url, alt } => image(url, alt, overlay, theme),
+        BlockKind::Image { url, alt, width } => image(url, alt, *width, overlay, theme),
         BlockKind::Bookmark { url, form } => bookmark(overlay.block, url, *form, theme, cx),
         BlockKind::Table {
             align,
@@ -1088,6 +1132,10 @@ fn code_block(
             div()
                 .id(ElementId::named_usize("md-code", ix))
                 .overflow_x_scroll()
+                // Without it a scroll down the page turns sideways the moment
+                // the pointer crosses a code block: gpui remaps input to
+                // whichever axis a container can scroll.
+                .restrict_scroll_to_axis()
                 .relative()
                 .px(px(CODE_PADDING_X))
                 .py(px(CODE_PADDING_Y))
@@ -1160,7 +1208,7 @@ fn copy_button(
 /// type, so a document being read is not a column of pictures each trailing a
 /// blank line. With no URL yet the picture is a dashed row instead — the shape
 /// the slash menu makes, waiting to be told what to show.
-fn image(url: &str, alt: &Text, overlay: Overlay, theme: &Theme) -> AnyElement {
+fn image(url: &str, alt: &Text, width: Option<u32>, overlay: Overlay, theme: &Theme) -> AnyElement {
     let hint = SharedString::new_static(CAPTION_HINT);
     let overlay = Overlay {
         placeholder: Some(&hint),
@@ -1180,34 +1228,64 @@ fn image(url: &str, alt: &Text, overlay: Overlay, theme: &Theme) -> AnyElement {
             .text_color(theme.text_muted)
             .child(IMAGE_EMPTY)
     } else {
-        div()
+        // A URL is fetched; anything else is a file, and gpui reads one only
+        // from a `PathBuf` — handed a string it looks for an asset built into
+        // the binary and paints nothing.
+        let picture = match url.contains("://") {
+            true => img(SharedString::from(url.to_string())),
+            false => img(std::path::PathBuf::from(url)),
+        };
+        let box_ = div()
+            .relative()
             .rounded(px(IMAGE_RADIUS))
             .overflow_hidden()
             .border_1()
             .border_color(theme.border)
-            // A URL is fetched; anything else is a file, and gpui reads one
-            // only from a `PathBuf` — handed a string it looks for an asset
-            // built into the binary and paints nothing.
-            .child(match url.contains("://") {
-                true => img(SharedString::from(url.to_string())).max_w_full(),
-                false => img(std::path::PathBuf::from(url)).max_w_full(),
-            })
+            .children(overlay.layouts.map(|layouts| {
+                let layouts = layouts.clone();
+                let ix = overlay.block;
+                canvas(
+                    move |bounds, _, _| layouts.record_picture(ix, bounds),
+                    |_, _, _, _| (),
+                )
+                .absolute()
+                .size_full()
+            }));
+        match width {
+            // A stated width is the box's: it hugs, so the border is around
+            // the picture rather than around the column beside it, and the
+            // picture fills what the box settled on — which `max_w_full`
+            // holds inside the page however wide the width was written.
+            Some(width) => box_
+                .self_start()
+                .max_w_full()
+                .w(px(width as f32))
+                .child(picture.w(px(width as f32)).max_w_full()),
+            // Unstated, the picture scales itself against the column, which
+            // is a percentage and so needs a box that spans one to measure.
+            None => box_.child(picture.max_w_full()),
+        }
     };
     div()
         .flex()
         .flex_col()
         .gap(px(CAPTION_GAP))
         .child(picture)
-        .when(!alt.is_empty() || overlay.caret().is_some(), |el| {
-            el.child(text_element(
-                alt,
-                CAPTION_TEXT_SIZE,
-                CAPTION_LINE_HEIGHT,
-                FontWeight::NORMAL,
-                overlay,
-                theme,
-            ))
-        })
+        // An empty caption still paints while the caret is in it, or there
+        // would be nothing to type into and no hint saying so.
+        .when(
+            overlay.caption == Caption::Shown && (!alt.is_empty() || overlay.caret().is_some()),
+            |el| {
+                el.child(text_element(
+                    alt,
+                    CAPTION_TEXT_SIZE,
+                    CAPTION_LINE_HEIGHT,
+                    FontWeight::NORMAL,
+                    overlay,
+                    theme,
+                ))
+            },
+        )
         .into_any_element()
 }
 
@@ -1492,6 +1570,7 @@ fn table(
         .id(ElementId::named_usize("md-table", ix))
         .w_full()
         .overflow_x_scroll()
+        .restrict_scroll_to_axis()
         .child(inner)
         .into_any_element()
 }

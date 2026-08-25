@@ -142,10 +142,17 @@ fn write_block(out: &mut String, kind: &BlockKind, indent: u8) {
             out.push_str(&pad);
             out.push_str(&fence);
         }
-        BlockKind::Image { url, alt } => {
+        BlockKind::Image { url, alt, width } => {
             out.push_str(&pad);
             out.push_str("![");
             escape_inline(out, &alt.text);
+            // After the escaping, and bare: every `|` a caption holds is
+            // written `\|` to keep two body lines from reconstituting into a
+            // table, so an unescaped one is the delimiter and nothing else.
+            if let Some(width) = width {
+                out.push('|');
+                out.push_str(&width.to_string());
+            }
             out.push_str("](");
             out.push_str(url);
             out.push(')');

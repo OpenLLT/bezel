@@ -1,29 +1,44 @@
 //! Layout constants. Numbers drive layout, colors are paint: these live as
 //! plain numbers and never depend on which color is painted.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use crate::theme::Theme;
+
+/// The branded base radius behind [`Theme::radius`], as raw `f32` bits.
+static BASE: AtomicU32 = AtomicU32::new(Theme::BASE_RADIUS.to_bits());
+
+/// The branded frost alpha behind [`Theme::glass`], as raw `f32` bits.
+static FROST: AtomicU32 = AtomicU32::new(Theme::GLASS_ALPHA.to_bits());
+
+/// Point the radius accessors at a base. Called by
+/// [`Theme::install`](crate::theme::Theme::install).
+pub(crate) fn set_base_radius(radius: f32) {
+    BASE.store(radius.to_bits(), Ordering::Relaxed);
+}
+
+/// Point [`Theme::glass`] at a frost alpha. Called by
+/// [`Theme::install`](crate::theme::Theme::install).
+pub(crate) fn set_frost(alpha: f32) {
+    FROST.store(alpha.to_bits(), Ordering::Relaxed);
+}
+
+pub(crate) fn frost() -> f32 {
+    f32::from_bits(FROST.load(Ordering::Relaxed))
+}
 
 impl Theme {
     // ---- numbers drive layout (px) ----
-    /// Frost translucency over the blurred window background (macOS vibrancy).
-    /// Opaque elsewhere: Linux/Windows get no compositor-blur guarantee, and a
-    /// merely transparent window would show raw desktop through the sidebar.
-    /// Darkness matched by eye to a reference Electron app's dark glass. That
-    /// scrim is 0.76 over `hsl(0 0% 3%)`, but it sits on Electron's
-    /// `under-window` vibrancy MATERIAL, which pre-darkens the blur; our bare
-    /// backdrop blur has no material layer, so the scrim runs heavier to land
-    /// on the same perceived tone (see [`Theme::glass`]).
-    pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
-    /// Light-mode frost alpha — glass-forward, like dark mode.
+    /// The frost alpha [`Brand::glass`](crate::Brand::glass) starts from.
+    /// Matched by eye to a reference Electron app's dark glass: its scrim is
+    /// 0.76 over `hsl(0 0% 3%)`, but sits on the `under-window` vibrancy
+    /// MATERIAL, which pre-darkens the blur; a bare backdrop blur has no such
+    /// layer, so ours runs heavier to land on the same perceived tone.
     ///
-    /// A light tint controls the blur less than a dark one: the desktop's
-    /// colour bleeds through more readily, so light frost runs *heavier* than
-    /// an equal-looking dark frost to keep the chrome on a known-enough
-    /// background for its labels (macOS light sidebars do the same — their
-    /// vibrancy material is mostly white). Floating cards compensate further:
-    /// see [`Self::glass_overlay`], where light coverage steps up to keep menu
-    /// text legible over an unknown backdrop.
-    pub const GLASS_ALPHA_LIGHT: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
+    /// Opaque off macOS: Linux and Windows get no compositor-blur guarantee,
+    /// and a merely transparent window would show raw desktop through the
+    /// sidebar. An app that knows its compositor sets the brand field anyway.
+    pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
     /// Main-panel header height (the reference `h-11`) — in-card headers (changes pane).
     pub const HEADER_HEIGHT: f32 = 44.0;
     /// The unified window titlebar (traffic lights + cluster + tabs). Content
@@ -47,8 +62,19 @@ impl Theme {
     /// hover-revealed timestamp) never sits inside the fade when scrolled
     /// to the bottom.
     pub const TRANSCRIPT_FADE_BAND: f32 = 24.0;
+    /// Button, text field and select-trigger radius — the crate's most-used
+    /// corner after the derived ones, and unnamed until the concentric pass
+    /// separated the eight sites that *chose* 8.0 from the ones that only
+    /// arrived at it as `12 − 4`.
+    ///
+    /// Every other corner is a ratio of this one, so
+    /// [`Brand::radius`](crate::Brand::radius) moves the whole set together.
+    pub const BASE_RADIUS: f32 = 8.0;
+
     /// Message bubble corner radius.
-    pub const BUBBLE_RADIUS: f32 = 16.0;
+    pub fn bubble_radius() -> f32 {
+        Self::radius(2.0)
+    }
     /// Floating-surface corner radius — popovers, menus, the command palette,
     /// group boxes.
     ///
@@ -58,18 +84,33 @@ impl Theme {
     /// it shows only on glass and only at the corners. So the radius is named
     /// once and read at both ends, rather than written twice sixty lines apart
     /// — which is how three independent `12.0`s came to exist here.
-    pub const SURFACE_RADIUS: f32 = 12.0;
+    pub fn surface_radius() -> f32 {
+        Self::radius(1.5)
+    }
     /// Panel / card corner radius.
-    pub const PANEL_RADIUS: f32 = 10.0;
-    /// Button, text field and select-trigger radius — the crate's most-used
-    /// corner after the derived ones, and unnamed until the concentric pass
-    /// separated the eight sites that *chose* 8.0 from the ones that only
-    /// arrived at it as `12 − 4`.
-    pub const BUTTON_RADIUS: f32 = 8.0;
+    pub fn panel_radius() -> f32 {
+        Self::radius(1.25)
+    }
+    /// Button, text field and select-trigger radius.
+    pub fn button_radius() -> f32 {
+        Self::radius(1.0)
+    }
     /// Small control radius (chips, tags, steppers) — a size down from
-    /// [`Self::BUTTON_RADIUS`], for things that sit inside a control rather
+    /// [`Self::button_radius`], for things that sit inside a control rather
     /// than being one.
-    pub const CONTROL_RADIUS: f32 = 6.0;
+    pub fn control_radius() -> f32 {
+        Self::radius(0.75)
+    }
+
+    /// A corner as a multiple of the branded base radius.
+    ///
+    /// Read from a process-wide mirror rather than the theme global for the
+    /// reason [`current_appearance`](crate::paint::current_appearance) is: the
+    /// element builders that round a corner are free functions with no `cx` in
+    /// scope, and a radius is one number for the whole app.
+    fn radius(ratio: f32) -> f32 {
+        f32::from_bits(BASE.load(Ordering::Relaxed)) * ratio
+    }
 
     /// The concentric child of a surface: a row inset by `inset` inside a
     /// container of radius `outer` keeps its corners parallel to the

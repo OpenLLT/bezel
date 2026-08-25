@@ -364,6 +364,26 @@ pub(crate) fn collapse_to_one_line(text: &mut Text) {
     }
 }
 
+/// Split a trailing `|480` off an image's alt text, which is where a width is
+/// written down.
+///
+/// Obsidian's spelling, and the only one the parser leaves intact: `{width=480}`
+/// trails as literal text and breaks the paragraph out of being an image at all,
+/// and `=480x` is not an image to begin with. The last `|` wins, so a caption
+/// may hold its own — but one *ending* in `|123` gives that tail up, because the
+/// escape that tells them apart on disk is gone by the time this reads it.
+fn split_width(alt: &str) -> (&str, Option<u32>) {
+    let Some((caption, tail)) = alt.rsplit_once('|') else {
+        return (alt, None);
+    };
+    // A zero would paint a picture no pixels wide, and nothing that writes one
+    // can produce it — the drag floors at `MIN_IMAGE_WIDTH`.
+    match tail.parse().ok().filter(|width| *width > 0) {
+        Some(width) => (caption, Some(width)),
+        None => (alt, None),
+    }
+}
+
 fn memchr_newlines(text: &str) -> impl Iterator<Item = usize> + '_ {
     text.bytes()
         .enumerate()
@@ -470,10 +490,11 @@ impl ParseState {
             && range.start == 0
             && range.end == text.text.len()
         {
-            let (url, alt) = (url.clone(), Text::plain(text.text));
+            let (caption, width) = split_width(&text.text);
+            let (url, alt) = (url.clone(), Text::plain(caption.to_string()));
             self.flush_marker();
             let indent = self.indent();
-            self.push(BlockKind::Image { url, alt }, indent);
+            self.push(BlockKind::Image { url, alt, width }, indent);
             return;
         }
 
