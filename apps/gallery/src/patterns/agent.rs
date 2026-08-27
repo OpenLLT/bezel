@@ -23,6 +23,7 @@ use gpui::{
     AnyElement, Context, Entity, Render, SharedString, Window, div, linear_color_stop,
     linear_gradient, prelude::*, px,
 };
+use motion::{Fade, Painter};
 use theme::Theme;
 use ui::{
     icons,
@@ -96,14 +97,14 @@ pub struct Activity {
     bar: ScrollbarState,
 }
 
-impl Default for Activity {
-    fn default() -> Self {
+impl Activity {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             run: None,
             thought: widgets::Takeover::default(),
             scroll: gpui::ScrollHandle::new(),
             follow: FollowState::new(),
-            bar: ScrollbarState::new(),
+            bar: ScrollbarState::new(Painter::of(cx)),
         }
     }
 }
@@ -150,7 +151,7 @@ impl Activity {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let running = self.running();
-        let view = cx.entity_id();
+        let view = Painter::of(cx);
         // Built here rather than inside the row, because gpui reads an svg's
         // colour off that element's own style: a chevron tinted by its parent
         // paints nothing at all.
@@ -244,6 +245,7 @@ impl Activity {
 
 impl Render for Activity {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = Painter::of(cx);
         let theme = Theme::of(cx).clone();
         let running = self.running();
         let open = self.thought.get(running);
@@ -307,7 +309,7 @@ impl Render for Activity {
                             .child(theme.button(
                                 "Ask again",
                                 ButtonStyle::Ghost,
-                                Some("agent-ask".into()),
+                                Some(Fade::new(view, "agent-ask")),
                             )),
                     ),
             )
@@ -803,6 +805,7 @@ impl Composer {
     /// `TextField::offset_bounds` is the same measurement the IME candidate
     /// panel anchors to, so it follows the caret down as the box grows.
     fn picker(&self, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let view = Painter::of(cx);
         let hash = self.mention?;
         let anchor = self.field.read(cx).offset_bounds(hash, window)?;
         let rows: Vec<AnyElement> = self
@@ -814,7 +817,7 @@ impl Composer {
                 popover::menu_row(
                     theme,
                     Some(position) == self.filter.active(),
-                    format!("mention-{item}"),
+                    Fade::new(view, format!("mention-{item}")),
                 )
                 .id(SharedString::from(format!("mention-{item}")))
                 .on_click(cx.listener(move |composer, _, _, cx| composer.accept(item, cx)))

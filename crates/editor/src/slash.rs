@@ -9,6 +9,7 @@
 //! field to hand focus to.
 
 use gpui::{ScrollHandle, SharedString};
+use motion::Painter;
 use ui::{popover::Filter, scroll::TransientState};
 
 use markdown::{Align, BlockKind, Cursor, Text};
@@ -100,12 +101,12 @@ pub struct Slash {
 }
 
 impl Slash {
-    pub fn open(at: Cursor) -> Self {
+    pub fn open(at: Cursor, painter: Painter) -> Self {
         Self {
             at,
             filter: Filter::new(items().into_iter().map(|(label, _)| label).collect()),
             scroll: ScrollHandle::new(),
-            bar: TransientState::new(),
+            bar: TransientState::new(painter),
         }
     }
 

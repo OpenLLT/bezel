@@ -24,6 +24,7 @@ use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, Pixels, SharedString,
     Window, actions, canvas, div, prelude::*, px,
 };
+use motion::{Fade, Painter};
 use theme::Theme;
 
 actions!(
@@ -158,7 +159,7 @@ impl Combobox {
     fn menu_card(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
         // Element ids are namespaced by the view; hover-fade keys are a global
         // map, so those carry the entity id — a form can hold several of these.
-        let view = cx.entity_id();
+        let view = Painter::of(cx);
         let rows: Vec<gpui::AnyElement> = self
             .filter
             .filtered()
@@ -169,7 +170,7 @@ impl Combobox {
                     theme,
                     Some(item) == self.chosen,
                     Some(position) == self.filter.active(),
-                    SharedString::from(format!("combobox-{view}-row-{item}")),
+                    Fade::new(view, format!("combobox-row-{item}")),
                 )
                 .id(SharedString::from(format!("row-{item}")))
                 .on_click(cx.listener(move |combobox, _, _, cx| combobox.choose(item, cx)))

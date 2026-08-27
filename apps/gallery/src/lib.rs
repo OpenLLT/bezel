@@ -10,6 +10,8 @@ use gpui::{
     AnyElement, App, Axis, Context, DragMoveEvent, Empty, Entity, KeyBinding, SharedString, Window,
     actions, div, prelude::*, px, relative,
 };
+use motion::{Fade, Painter};
+use rail::{Rail, Selected};
 use std::{cell::Cell, collections::HashSet, rc::Rc};
 use theme::{
     Theme,
@@ -19,16 +21,19 @@ use ui::{
     combobox::{self, Combobox},
     control_bar::{self, Shape as ControlBarShape},
     date::{self, Calendar, Date},
+    floating::{self, Floating},
     focus,
     hover_card::HoverCard,
     icons,
     input::{self, Shape, TextField},
     list, loaders,
+    material::Frosted as _,
     menubar::{self, Item, Menu, Menubar, MenubarEvent},
     pagination,
     palette::{self, CommandPalette, PaletteEvent},
     popover,
-    scroll::{self, ScrollbarState},
+    scroll::{self, ScrollbarState, TransientState},
+    stats::{self, Stats},
     table::{self, Column, Sort, Width},
     titlebar,
     tooltip::Tooltip,
@@ -41,7 +46,13 @@ use ui::{
 
 actions!(
     gallery,
-    [OpenPalette, ToggleInspector, ToggleFullScreen, CloseOverlay]
+    [
+        OpenPalette,
+        ToggleFullScreen,
+        CloseOverlay,
+        ToggleFpsOverlay,
+        ResetFrameOverlayStats
+    ]
 );
 
 /// Every keymap this view needs, in one call.
@@ -73,14 +84,11 @@ pub fn init(cx: &mut App) {
 }
 
 pub mod highlight;
-/// gpui builds its element inspector into every debug build; release builds
-/// have no such window method, so the whole surface is debug-only.
-#[cfg(debug_assertions)]
-pub mod inspector;
 
 pub mod create;
 pub mod patterns;
 pub mod preview;
+mod rail;
 pub mod store;
 
 pub const LANGUAGES: [&str; 8] = [
@@ -107,17 +115,32 @@ pub const COMMANDS: [&str; 8] = [
 
 const SELECT_CHOICES: [&str; 3] = ["Comfortable", "Compact", "Dense"];
 
-/// How far the floating rail sits off the window edges, and the padding inside
-/// it. Read together: they set the rail's grid, and the traffic lights are
-/// placed on that grid rather than left where AppKit drops them — which is
-/// relative to the window, and so lands in the card's rounded corner.
-const RAIL_INSET: f32 = 10.0;
-const RAIL_PAD: f32 = 10.0;
+/// The rail's padding — the grid its rows, its footer and the traffic lights
+/// all sit on.
+pub(crate) const RAIL_PAD: f32 = 20.0;
 
-/// Where the traffic lights' top-left corner goes: the rail's first row. Passed
-/// to `TitlebarOptions::traffic_light_position`, whose `x`/`y` are the gap from
-/// the window's left and top edges to the buttons.
-pub const TRAFFIC_LIGHT_ORIGIN: f32 = RAIL_INSET + RAIL_PAD;
+/// The rail's width, and the padding inside the content card. Read together
+/// they are the window's two columns: the nav strip aligns to the card's grid
+/// so its tabs sit over the section header and its switch over the header's
+/// trailing edge.
+pub(crate) const RAIL_WIDTH: f32 = 200.0;
+const CARD_PAD: f32 = 24.0;
+
+/// Padding inside one nav tab, subtracted back out of the strip so the tabs'
+/// text starts on the card's grid rather than their hit boxes.
+const NAV_ITEM_PAD: f32 = 4.0;
+
+/// macOS traffic light diameter — measured 2026-08-27 on macOS 26. AppKit owns
+/// the buttons and gpui reads their frame off the live views, so no constant
+/// here can derive it.
+const TRAFFIC_LIGHT_SIZE: f32 = 14.0;
+
+/// The traffic lights' top-left corner, passed to
+/// `TitlebarOptions::traffic_light_position`: the rail's grid across, the nav
+/// strip's centre down. macOS sizes the button container to `height + 2y`, so
+/// the `y` that centres them is the one making that container the strip.
+pub const TRAFFIC_LIGHT_X: f32 = RAIL_PAD;
+pub const TRAFFIC_LIGHT_Y: f32 = (Theme::HEADER_HEIGHT - TRAFFIC_LIGHT_SIZE) / 2.0;
 
 /// What one press of ← or → moves the slider. The step is never the library's:
 /// bezel dispatches [`focus::Decrement`]/[`focus::Increment`] and the page that
@@ -460,6 +483,11 @@ pub const PATTERNS: &[Group] = &[
                 "Blob avatars",
                 "apps/gallery/src/patterns/avatar.rs",
             ),
+            section(
+                "agent-mascot",
+                "Pixel mascots",
+                "apps/gallery/src/patterns/mascot.rs",
+            ),
         ],
     },
     Group {
@@ -573,6 +601,7 @@ pub const COMPONENTS: &[Group] = &[
             ),
             section("titlebar", "Titlebar", "crates/ui/src/titlebar.rs"),
             section("control-bar", "Control bar", "crates/ui/src/control_bar.rs"),
+            section("floating", "Floating panel", "crates/ui/src/floating.rs"),
         ],
     },
     // Nothing here is built. It is one whole group on purpose: the data
@@ -615,6 +644,7 @@ pub const COMPONENTS: &[Group] = &[
             section("alerts", "Alert strips", "crates/ui/src/widgets/status.rs"),
             section("step-row", "Step row", "crates/ui/src/widgets/status.rs"),
             section("loaders", "Loaders", "crates/ui/src/loaders.rs"),
+            section("stats", "Stats", "crates/ui/src/stats.rs"),
         ],
     },
 ];
@@ -711,10 +741,11 @@ pub struct Gallery {
     /// Scroll position and thumb-grab for every scrolling surface here. gpui
     /// owns the offset; the second half of each pair is only where in the thumb
     /// a drag took hold.
-    rail_scroll: gpui::ScrollHandle,
-    rail_bar: ScrollbarState,
+    /// The rail is its own view so it can be cached: forty rows that change
+    /// only on a tab or a selection, and were being rebuilt every frame.
+    rail: Entity<Rail>,
     pane_scroll: gpui::ScrollHandle,
-    pane_bar: ScrollbarState,
+    pane_bar: TransientState,
     demo_scroll: gpui::ScrollHandle,
     demo_bar: ScrollbarState,
     /// The follow-scroll demo: a log that grows under a view pinned to its end.
@@ -760,12 +791,25 @@ pub struct Gallery {
     orbs: Entity<patterns::orbs::Orbs>,
     syntax: Entity<patterns::syntax::Syntax>,
     avatar: Entity<patterns::avatar::Avatars>,
+    mascot: Entity<patterns::mascot::Mascots>,
     /// Which top-nav tab is open.
     tab: usize,
     /// Where you were in each tab — switching away and back should land you
     /// where you left, not at the top.
     selected: Vec<&'static str>,
     dialog: popover::Popup<()>,
+    /// The frame meter, mounted once and floated over whichever page is open.
+    /// One instance: two of them would each count the other's frames, and
+    /// neither would ever read zero.
+    stats: Entity<Stats>,
+    stats_shown: bool,
+    /// Where the meter has been dragged to, if it has.
+    stats_at: Floating,
+    /// The Floating panel page's own panel, so dragging the demo never moves
+    /// the meter — one state per panel is what keeps two of them apart.
+    panel_demo: Floating,
+    /// The Stats page's spinner — what the meter is there to catch.
+    stats_spinner: bool,
     /// Renders one section alone, without the nav, rail or header around it.
     /// The website embeds a page per component this way, so a doc page shows
     /// the component it documents rather than the whole browser.
@@ -774,6 +818,12 @@ pub struct Gallery {
 
 impl Gallery {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        // Opened on the same page the fields below start at.
+        let rail = cx.new(|cx| Rail::new(2, TABS[2].home, cx));
+        cx.subscribe(&rail, |view, _, selected: &Selected, cx| {
+            view.open(view.tab, selected.0, cx);
+        })
+        .detach();
         // The bar reports a place in the menus it was given; the host is what
         // turns that back into a name, and what decides it means anything.
         let menubar = cx.new(|cx| Menubar::new(demo_menus(), cx));
@@ -842,26 +892,25 @@ impl Gallery {
             brand_knobs: std::array::from_fn(|_| cx.focus_handle()),
             create_file: 0,
             tab_strip: [cx.focus_handle(), cx.focus_handle(), cx.focus_handle()],
-            rail_scroll: gpui::ScrollHandle::new(),
-            rail_bar: ScrollbarState::new(),
+            rail,
             pane_scroll: gpui::ScrollHandle::new(),
-            pane_bar: ScrollbarState::new(),
+            pane_bar: TransientState::new(Painter::of(cx)),
             demo_scroll: gpui::ScrollHandle::new(),
-            demo_bar: ScrollbarState::new(),
+            demo_bar: ScrollbarState::new(Painter::of(cx)),
             log_scroll: gpui::ScrollHandle::new(),
-            log_bar: ScrollbarState::new(),
+            log_bar: ScrollbarState::new(Painter::of(cx)),
             log_follow: scroll::FollowState::new(),
             // Enough to overflow the box on arrival, so the pin has something
             // to hold onto before you press anything.
             log_lines: 24,
             table_scroll: gpui::ScrollHandle::new(),
-            table_bar: ScrollbarState::new(),
+            table_bar: ScrollbarState::new(Painter::of(cx)),
             table_sort: None,
             page: 1,
             tree_scroll: gpui::ScrollHandle::new(),
-            tree_bar: ScrollbarState::new(),
+            tree_bar: ScrollbarState::new(Painter::of(cx)),
             rows_scroll: gpui::UniformListScrollHandle::new(),
-            rows_bar: ScrollbarState::new(),
+            rows_bar: ScrollbarState::new(Painter::of(cx)),
             rows_built: Rc::new(Cell::new(0)),
             // Opened so the page shows nesting on arrival rather than a flat
             // list of two folders.
@@ -883,10 +932,10 @@ impl Gallery {
             tab: 2,
             selected: TABS.iter().map(|tab| tab.home).collect(),
             dialog: popover::Popup::default(),
-            activity: cx.new(|_| patterns::agent::Activity::default()),
+            activity: cx.new(patterns::agent::Activity::new),
             tool_calls: cx.new(|_| patterns::agent::ToolCalls::default()),
             agent_composer: cx.new(patterns::agent::Composer::new),
-            transcript: cx.new(|_| patterns::transcript::Transcript::default()),
+            transcript: cx.new(patterns::transcript::Transcript::new),
             diff: cx.new(|_| patterns::diff::Diff),
             document: cx.new(patterns::document::Document::new),
             editor: cx.new(patterns::editor::EditorDemo::new),
@@ -895,8 +944,25 @@ impl Gallery {
             orbs: cx.new(patterns::orbs::Orbs::new),
             syntax: cx.new(patterns::syntax::Syntax::new),
             avatar: cx.new(patterns::avatar::Avatars::new),
+            mascot: cx.new(|_| patterns::mascot::Mascots::default()),
+            stats: cx.new(Stats::new),
+            stats_shown: false,
+            stats_at: Floating::new(Painter::of(cx)),
+            panel_demo: Floating::new(Painter::of(cx)),
+            stats_spinner: false,
             embedded: false,
         }
+    }
+
+    /// The one place a page is opened. Everything that changes what the browser
+    /// shows goes through here, because the rail is cached: it repaints when it
+    /// is told to, and a notify raised mid-render never reaches it — the frame
+    /// it would have to arrive in has already decided the rail is clean.
+    fn open(&mut self, tab: usize, key: &'static str, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.selected[tab] = key;
+        self.rail.update(cx, |rail, cx| rail.show(tab, key, cx));
+        cx.notify();
     }
 
     /// The browser, opened on one section — `cargo run -p gallery -- editor`.
@@ -905,8 +971,7 @@ impl Gallery {
     pub fn showing(key: &str, cx: &mut Context<Self>) -> Self {
         let mut gallery = Self::new(cx);
         if let Some(tab) = tab_of(key) {
-            gallery.tab = tab;
-            gallery.selected[tab] = section_at(key).expect("tab_of matched").key;
+            gallery.open(tab, section_at(key).expect("tab_of matched").key, cx);
         }
         gallery
     }
@@ -961,20 +1026,37 @@ impl Gallery {
         cx.notify();
     }
 
-    /// `cmd-alt-i`. The handler lives on this view rather than on the app so
-    /// it has the window in hand — `App::active_window` is a guess, and it is
-    /// `None` whenever the app is not frontmost.
+    /// `ctrl-alt-shift-p` — zed's own chord for the same overlay, cycling
+    /// hidden → last frame's draw time → percentiles and total frame count.
     ///
-    /// Debug builds only: `Window::toggle_inspector` does not exist in release,
-    /// so the whole affordance compiles out.
-    fn toggle_inspector(
+    /// The number to watch is FRAMES while nothing on screen is moving: a
+    /// window at rest should hold it still. gpui paints the panel as raw quads
+    /// straight into the scene, skipping layout, text and invalidation, so
+    /// reading the count does not add to it.
+    ///
+    /// Built on `--features profiler`; the histograms behind it are not free,
+    /// so without that flag the whole affordance compiles out.
+    fn toggle_fps_overlay(
         &mut self,
-        _: &ToggleInspector,
+        _: &ToggleFpsOverlay,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        _: &mut Context<Self>,
     ) {
-        #[cfg(debug_assertions)]
-        _window.toggle_inspector(_cx);
+        #[cfg(feature = "profiler")]
+        _window.cycle_debug_frame_overlay_mode();
+    }
+
+    /// `ctrl-alt-shift-o`. Clears the percentile window so the next reading
+    /// describes what you are about to do rather than the scrolling you did to
+    /// reach it. The total frame count survives on purpose.
+    fn reset_frame_overlay_stats(
+        &mut self,
+        _: &ResetFrameOverlayStats,
+        _window: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+        #[cfg(feature = "profiler")]
+        _window.reset_debug_frame_overlay_stats();
     }
 
     /// `ctrl-cmd-f`. macOS draws that shortcut on the Window menu of a nib-built
@@ -1106,113 +1188,6 @@ impl Gallery {
     /// The navigation rail: every component, one row each, the current one
     /// carrying the same selected wash a menu row does — this is the library
     /// browsing itself.
-    fn rail(&self, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let tab = &TABS[self.tab];
-        let selected = self.selected[self.tab];
-        div()
-            .flex_none()
-            .w(px(220.0))
-            // Floating: inset from the window edges rather than butted against
-            // them, so the frost reads as a plane the rail sits on.
-            .m(px(RAIL_INSET))
-            .flex()
-            .flex_col()
-            .rounded(px(Theme::panel_radius()))
-            .bg(theme.card_glass_bg())
-            .border_1()
-            .border_color(theme.border)
-            .overflow_hidden()
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .id("gallery-rail")
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.rail_scroll)
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .p(px(RAIL_PAD))
-                                    // The lights sit over the rail's own top
-                                    // corner. Full screen takes them away, and
-                                    // the reserved strip would be a hole.
-                                    .when(!window.is_fullscreen(), |list| {
-                                        list.pt(px(Theme::TITLEBAR_HEIGHT - RAIL_INSET))
-                                    })
-                                    .children(tab.groups.iter().flat_map(|group| {
-                                        let heading = popover::menu_heading(theme, group.title)
-                                            .into_any_element();
-                                        let rows = group.sections.iter().map(|section| {
-                                            popover::menu_row(
-                                                theme,
-                                                section.key == selected,
-                                                SharedString::from(format!("rail-{}", section.key)),
-                                            )
-                                            .id(SharedString::from(format!(
-                                                "rail-item-{}",
-                                                section.key
-                                            )))
-                                            .on_click(cx.listener(move |view, _, _, cx| {
-                                                let tab = view.tab;
-                                                view.selected[tab] = section.key;
-                                                cx.notify();
-                                            }))
-                                            // Unbuilt rows stay legible but recede, so the rail
-                                            // reads as "what exists" and "what is left" at once.
-                                            .when(
-                                                section.source.is_none() && section.key != selected,
-                                                |row| row.text_color(theme.text_faint),
-                                            )
-                                            .child(SharedString::from(section.title))
-                                            .into_any_element()
-                                        });
-                                        std::iter::once(heading).chain(rows)
-                                    })),
-                            ),
-                    )
-                    // After the content: hitboxes and paint are both
-                    // order-dependent in gpui, so a bar added first would sit
-                    // under what it reports on.
-                    .child(scroll::scrollbar(
-                        "rail-bar",
-                        &self.rail_scroll,
-                        &self.rail_bar,
-                    )),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_row()
-                    .items_baseline()
-                    .gap(px(6.0))
-                    .px(px(12.0))
-                    .py(px(10.0))
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_size(px(13.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("bezel"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .font_family(theme.font_mono.clone())
-                            .text_color(theme.text_faint)
-                            .child(env!("CARGO_PKG_VERSION")),
-                    ),
-            )
-            .into_any_element()
-    }
-
     /// The top nav: the kind of thing you are browsing, and the appearance
     /// switch. Everything here is global — per-page detail belongs in
     /// [`Self::header`].
@@ -1222,24 +1197,21 @@ impl Gallery {
         div()
             .flex_none()
             .h(px(Theme::HEADER_HEIGHT))
-            .px(px(16.0))
+            .pl(px(RAIL_WIDTH + CARD_PAD - NAV_ITEM_PAD))
+            .pr(px(CARD_PAD))
             .flex()
             .flex_row()
             .items_center()
             .gap(px(18.0))
-            .border_b_1()
-            .border_color(theme.border)
             .children(TABS.iter().enumerate().map(|(index, tab)| {
                 let selected = index == current;
                 let mut item = div()
                     .id(SharedString::from(format!("nav-{}", tab.title)))
-                    .px(px(4.0))
-                    .py(px(4.0))
+                    .p(px(NAV_ITEM_PAD))
                     .text_size(px(13.0))
                     .cursor_pointer()
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        view.tab = index;
-                        cx.notify();
+                        view.open(index, view.selected[index], cx);
                     }))
                     .child(SharedString::from(tab.title));
                 item = if selected {
@@ -1250,8 +1222,28 @@ impl Gallery {
                 };
                 item.into_any_element()
             }))
-            // Pushes the appearance switch to the trailing edge.
+            // Pushes the trailing controls to the far edge.
             .child(div().flex_1())
+            // The frame meter, on any page rather than only the one that
+            // documents it: what a window costs is a property of what you are
+            // looking at, so it has to follow you around to be worth reading.
+            .child(
+                div()
+                    .id("stats-toggle")
+                    .p(px(4.0))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.stats_shown = !view.stats_shown;
+                        cx.notify();
+                    }))
+                    .child(icons::icon(icons::CPU).size(px(15.0)).text_color(
+                        if self.stats_shown {
+                            theme.text
+                        } else {
+                            theme.text_faint
+                        },
+                    )),
+            )
             // A switch, not three segments. It reads the *resolved* appearance
             // rather than the mode, so it shows what you are actually looking
             // at while the app is still following the OS — and the first flip
@@ -1303,7 +1295,7 @@ impl Gallery {
         div()
             .flex_none()
             .h(px(Theme::HEADER_HEIGHT))
-            .px(px(24.0))
+            .px(px(CARD_PAD))
             .flex()
             .flex_row()
             .items_center()
@@ -1351,7 +1343,7 @@ impl Gallery {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let view = cx.entity_id();
+        let view = Painter::of(cx);
         let section = stack();
 
         match key {
@@ -1599,7 +1591,11 @@ impl Gallery {
             "buttons" => {
                 let labels = ["Ghost", "Prominent", "Destructive"];
                 let faces = [
-                    theme.button(labels[0], ButtonStyle::Ghost, Some("g-ghost".into())),
+                    theme.button(
+                        labels[0],
+                        ButtonStyle::Ghost,
+                        Some(Fade::new(view, "g-ghost")),
+                    ),
                     theme.button(labels[1], ButtonStyle::Prominent, None),
                     theme.button(labels[2], ButtonStyle::Destructive, None),
                 ];
@@ -1719,9 +1715,10 @@ impl Gallery {
                                                     popover::menu_row(
                                                         &theme,
                                                         index == self.theme_choice,
-                                                        SharedString::from(format!(
-                                                            "theme-row-{index}"
-                                                        )),
+                                                        Fade::new(
+                                                            view,
+                                                            format!("theme-row-{index}"),
+                                                        ),
                                                     )
                                                     .id(SharedString::from(format!(
                                                         "theme-{index}"
@@ -1940,7 +1937,7 @@ impl Gallery {
                                             "Start a run"
                                         },
                                         ButtonStyle::Ghost,
-                                        Some("g-takeover-run".into()),
+                                        Some(Fade::new(view, "g-takeover-run")),
                                     )),
                             )
                             // Which of the two rules is answering, on the page —
@@ -2042,7 +2039,7 @@ impl Gallery {
                             .child(theme.button(
                                 "Hover me",
                                 ButtonStyle::Ghost,
-                                Some("g-tip".into()),
+                                Some(Fade::new(view, "g-tip")),
                             )),
                     ),
                 )
@@ -2127,7 +2124,7 @@ impl Gallery {
                             .border_color(theme.border)
                             .bg(theme.surface)
                             .children(ROWS.iter().enumerate().map(|(index, (icon, label))| {
-                                let key = SharedString::from(format!("nav-row-{index}"));
+                                let key = Fade::new(view, format!("nav-row-{index}"));
                                 let row = theme
                                     .nav_row(
                                         Some(icon),
@@ -2164,7 +2161,7 @@ impl Gallery {
                                                 )),
                                         )
                                     });
-                                pressable(row, key, cx, move |view, cx| {
+                                pressable(row, key.key.clone(), cx, move |view, cx| {
                                     view.nav_choice = index;
                                     cx.notify();
                                 })
@@ -2407,14 +2404,14 @@ impl Gallery {
                 .child(
                     popover::popover_card(&theme).w(px(240.0)).children([
                         popover::menu_heading(&theme, "Section").into_any_element(),
-                        popover::menu_row(&theme, false, "m-one")
+                        popover::menu_row(&theme, false, Fade::new(view, "m-one"))
                             .child("First item")
                             .into_any_element(),
-                        popover::menu_row(&theme, true, "m-two")
+                        popover::menu_row(&theme, true, Fade::new(view, "m-two"))
                             .child("Active item")
                             .into_any_element(),
                         popover::divider().into_any_element(),
-                        popover::menu_row(&theme, false, "m-three")
+                        popover::menu_row(&theme, false, Fade::new(view, "m-three"))
                             .child("Third item")
                             .into_any_element(),
                     ]),
@@ -2491,6 +2488,83 @@ impl Gallery {
                 )
                 .into_any_element(),
 
+            "stats" => {
+                // The page documents the box in the corner, so the box has to
+                // be there while you read it.
+                self.stats_shown = true;
+                section
+                    .child(hint(
+                        &theme,
+                        "The meter in the corner is measuring this window. At rest \
+                         it reads 0 — nothing on screen is asking for a frame, and \
+                         the meter's own two-a-second tick is the one draw it does \
+                         not count. Mount the spinner and read what one animation \
+                         costs a whole window: every frame it asks for is a full \
+                         redraw, and the number is the rate it is really getting.",
+                    ))
+                    .child(
+                        row()
+                            .child(
+                                theme
+                                    .toggle(self.stats_spinner)
+                                    .id("stats-spinner")
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.stats_spinner = !view.stats_spinner;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(div().child("Mount a spinner"))
+                            .when(self.stats_spinner, |row| {
+                                row.child(loaders::pulse_loader(
+                                    "stats-pulse",
+                                    &theme,
+                                    8.0,
+                                    view,
+                                    cx,
+                                ))
+                            }),
+                    )
+                    .child(hint(
+                        &theme,
+                        "CPU is the whole process — user plus system, every thread — \
+                         as a percentage of one core, the figure Activity Monitor \
+                         prints. The web build has no such call and reads —.",
+                    ))
+                    .into_any_element()
+            }
+
+            "floating" => section
+                .child(hint(
+                    &theme,
+                    "Grab the card and move it. The panel lays a layer over the \
+                     surface it is mounted in and places the box inside it, so a \
+                     pointer that outruns a frame is still heard and the box never \
+                     stalls behind the cursor. It clamps nothing: dragged half off \
+                     the edge it stays there, and the point you grabbed it by is \
+                     under the pointer to drag it back.",
+                ))
+                .child(
+                    div()
+                        .relative()
+                        .h(px(280.0))
+                        .w_full()
+                        .rounded(px(Theme::panel_radius()))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.surface)
+                        .overflow_hidden()
+                        .child(floating::panel(
+                            "floating-demo",
+                            &self.panel_demo,
+                            gpui::point(px(40.0), px(40.0)),
+                            popover::popover_card(&theme)
+                                .w(px(180.0))
+                                .child(popover::menu_heading(&theme, "Drag me")),
+                        )),
+                )
+                .into_any_element(),
+
             "palette" => section
                 .child(
                     row()
@@ -2522,7 +2596,7 @@ impl Gallery {
                             .child(theme.button(
                                 "Open sheet",
                                 ButtonStyle::Ghost,
-                                Some("g-sheet".into()),
+                                Some(Fade::new(view, "g-sheet")),
                             )),
                     ),
                 )
@@ -2559,7 +2633,7 @@ impl Gallery {
                             .child(theme.button(
                                 "Open dialog",
                                 ButtonStyle::Ghost,
-                                Some("g-dialog".into()),
+                                Some(Fade::new(view, "g-dialog")),
                             )),
                     ),
                 )
@@ -2567,34 +2641,39 @@ impl Gallery {
 
             // Exercises the fork's backdrop-blur primitive: the card blurs the
             // striped band painted behind it.
-            "material" => {
-                section
-                    .child(
-                        div()
-                            .relative()
-                            .w(px(420.0))
-                            .h(px(150.0))
-                            .child(div().absolute().inset_0().flex().flex_row().children(
-                                (0..14).map(|i| {
+            "material" => section
+                .child(
+                    div()
+                        .relative()
+                        .w(px(420.0))
+                        .h(px(150.0))
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .flex_row()
+                                .children((0..14).map(|i| {
                                     div().w(px(30.0)).h_full().bg(if i % 2 == 0 {
                                         theme.accent
                                     } else {
                                         theme.warning
                                     })
-                                }),
-                            ))
-                            .child(div().absolute().top(px(28.0)).left(px(60.0)).child(
-                                ui::material::material(
-                                    12.0,
-                                    ui::material::MENU_BLUR,
-                                    popover::popover_card(&theme).w(px(220.0)).child(
-                                        popover::menu_row(&theme, false, "mat-a").child("Blurred"),
-                                    ),
-                                ),
-                            )),
-                    )
-                    .into_any_element()
-            }
+                                })),
+                        )
+                        .child(
+                            div().absolute().top(px(28.0)).left(px(60.0)).child(
+                                popover::popover_card(&theme)
+                                    .w(px(220.0))
+                                    .child(
+                                        popover::menu_row(&theme, false, Fade::new(view, "mat-a"))
+                                            .child("Blurred"),
+                                    )
+                                    .material(ui::material::MENU_BLUR),
+                            ),
+                        ),
+                )
+                .into_any_element(),
 
             "alerts" => section
                 .child(theme.error_strip("Something went wrong."))
@@ -2865,7 +2944,7 @@ impl Gallery {
                                 .child(theme.button(
                                     "Append a line",
                                     ButtonStyle::Ghost,
-                                    Some("g-follow-add".into()),
+                                    Some(Fade::new(view, "g-follow-add")),
                                 )),
                         )
                         .child(
@@ -2878,7 +2957,7 @@ impl Gallery {
                                 .child(theme.button(
                                     "Jump to latest",
                                     ButtonStyle::Ghost,
-                                    Some("g-follow-pin".into()),
+                                    Some(Fade::new(view, "g-follow-pin")),
                                 )),
                         )
                         // The state, on the page — the same trick the virtualized
@@ -3181,6 +3260,7 @@ impl Gallery {
             "agent-orbs" => self.orbs.clone().into_any_element(),
             "syntax" => self.syntax.clone().into_any_element(),
             "agent-avatar" => self.avatar.clone().into_any_element(),
+            "agent-mascot" => self.mascot.clone().into_any_element(),
 
             _ => div().into_any_element(),
         }
@@ -3547,7 +3627,9 @@ fn column() -> gpui::Div {
 
 impl Render for Gallery {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = Painter::of(cx);
         let theme = Theme::of(cx).clone();
+        let reduce_motion = cx.reduce_motion();
 
         // Rail on the left, one component in the pane — the set is long enough
         // that a single scroll of everything reads as a wall.
@@ -3572,10 +3654,11 @@ impl Render for Gallery {
                         // to the whole pane.
                         .child(div().p(px(32.0)).child(column().child(body))),
                 )
-                .child(scroll::scrollbar(
+                .child(scroll::transient(
                     "pane-bar",
                     &self.pane_scroll,
                     &self.pane_bar,
+                    reduce_motion,
                 ))
             }
         });
@@ -3586,32 +3669,37 @@ impl Render for Gallery {
         } else {
             div()
                 .flex()
-                .flex_row()
+                .flex_col()
                 .size_full()
-                .child(self.rail(&theme, window, cx))
+                .child(self.nav(&theme, cx))
                 .child(
                     div()
                         .flex_1()
-                        .min_w_0()
-                        .h_full()
+                        .min_h_0()
                         .flex()
-                        .flex_col()
-                        .child(self.nav(&theme, cx))
-                        .child(self.header(section, &theme))
-                        .child(pane),
+                        .flex_row()
+                        .child(self.rail.clone().cached(rail::style()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                // Runs off the window's right and bottom edges,
+                                // so the only corner that floats is the one
+                                // that gets rounded.
+                                .rounded_tl(px(Theme::panel_radius()))
+                                .bg(theme.surface)
+                                .border_t_1()
+                                .border_l_1()
+                                .border_color(theme.border)
+                                .overflow_hidden()
+                                .child(self.header(section, &theme))
+                                .child(pane),
+                        ),
                 )
         };
-
-        // A hover fade is a colour computed at paint time, not an animation
-        // element that drives itself: `hover_listener` marks the window dirty
-        // once when the pointer crosses, and everything after that frame is the
-        // host's to ask for. Without this the blend paints its first frame — at
-        // rest — and then freezes until something unrelated repaints, which
-        // reads as a wash that sticks and then jumps. It also ticks the fade
-        // table, which is what evicts entries for elements that have gone away.
-        if motion::hover_fades_active() {
-            window.request_animation_frame();
-        }
 
         // Traversal goes on the root so `tab` works wherever focus happens to
         // be, rather than only inside whatever claimed it.
@@ -3620,7 +3708,8 @@ impl Render for Gallery {
             .key_context("Gallery")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::open_palette))
-            .on_action(cx.listener(Self::toggle_inspector))
+            .on_action(cx.listener(Self::toggle_fps_overlay))
+            .on_action(cx.listener(Self::reset_frame_overlay_stats))
             .on_action(cx.listener(Self::toggle_full_screen))
             .on_action(cx.listener(Self::close_overlay))
             .on_mouse_down(
@@ -3636,6 +3725,21 @@ impl Render for Gallery {
             .text_color(theme.text)
             .text_size(px(14.0))
             .child(content)
+            .when(self.stats_shown, |root| {
+                // Home is read off the viewport rather than stored, so the
+                // corner it opens in is the corner of *this* window.
+                let viewport = window.viewport_size();
+                let home = gpui::point(
+                    viewport.width - px(stats::WIDTH + CARD_PAD),
+                    px(Theme::HEADER_HEIGHT + CARD_PAD),
+                );
+                root.child(floating::panel(
+                    "meter",
+                    &self.stats_at,
+                    home,
+                    self.stats.clone(),
+                ))
+            })
             .when_some(
                 self.context_menu
                     .get()
@@ -3652,7 +3756,7 @@ impl Render for Gallery {
                                     popover::menu_row(
                                         &theme,
                                         false,
-                                        SharedString::from(format!("ctx-{index}")),
+                                        Fade::new(view, format!("ctx-{index}")),
                                     )
                                     .id(SharedString::from(format!("ctx-item-{index}")))
                                     .on_click(
@@ -3701,7 +3805,7 @@ impl Render for Gallery {
                                         .child(theme.button(
                                             "Cancel",
                                             ButtonStyle::Ghost,
-                                            Some("g-dialog-no".into()),
+                                            Some(Fade::new(view, "g-dialog-no")),
                                         )),
                                 )
                                 .child(
@@ -3746,7 +3850,7 @@ impl Render for Gallery {
                                         .child(theme.button(
                                             "Close",
                                             ButtonStyle::Ghost,
-                                            Some("g-sheet-close".into()),
+                                            Some(Fade::new(view, "g-sheet-close")),
                                         )),
                                 ),
                         )

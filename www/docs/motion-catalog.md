@@ -15,24 +15,26 @@ gpui `Animation` has no native delay, so a spec with one folds it into the timel
 
 The common entrances are already wrapped, so a caller names the element rather than the tween — `fade_in`, `fade_quick`, `menu_in`, `dialog_in`, `splash_out`, and `menu_out`, which takes its progress from the caller because `with_animation`'s clock replays from 0 on remount and a replay mid-exit is a full-opacity flash.
 
-Hover washes are not animation elements. They are colors computed at paint time, blended through a per-key store:
+Hover washes are colors computed at paint time, blended through a per-fade store:
 
 ```rust
+let fade = Fade::new(cx.entity_id(), "row-3");
+
 div()
-    .on_hover(motion::hover_listener("row-3"))
-    .bg(motion::hover_blend("row-3", theme.surface, theme.element_hover))
+    .on_hover(motion::hover_listener(fade.clone()))
+    .bg(motion::hover_blend(&fade, theme.surface, theme.element_hover))
 ```
 
-That means the app's root render has to pump the frames:
+A [`Fade`] is which view paints the wash and which element inside it — the view is half the identity, so two views using `"row-3"` never trade each other's fade.
+
+The frames come from the same clock everything else in the library repeats on. `motion::lease(view, fps, until, cx)` claims a rate for one view: the app runs a single timer, wakes only when some view is owed a frame, notifies that view alone, and parks when the last claim lapses. A hover fade leases for its own 150ms and stops; a spinner renews its claim every render and drops off the moment it unmounts.
+
+That is the whole reason not to reach for `with_animation(…).repeat()`. Its request is the *window's*, at the display's rate, for as long as the element stays mounted — one spinner row measured 36% CPU at 120Hz, almost all of it the window rebuilding its element tree. Your own repeating animation belongs on the clock too: `MotionSpec::new` is `const` and its fields are public, so naming a spec is all it takes.
 
 ```rust
-if motion::hover_fades_active() {
-    window.request_animation_frame();
-}
+const BREATHE: MotionSpec = MotionSpec::new(1800, motion::EASE_IN_OUT);
+
+let phase = motion::pulse_delta(&BREATHE, cx.entity_id(), cx);
 ```
-
-Not optional. The listener dirties the window once as the pointer crosses; every frame after that has to be asked for, and an app that skips this paints the blend's first frame and holds it until something unrelated repaints. It is also the tick that evicts fades whose elements are gone, so skipping it leaks an entry per hovered element.
-
-The repeating loaders share one 30fps clock rather than running as repeating animations. A `with_animation` loop requests a redraw every display frame for as long as it is mounted — one spinner row measured 36% CPU at 120Hz — while `pulse_delta` leases the calling view onto a shared epoch, keeps every instance phase-locked, and parks the clock entirely when the last spinner unmounts.
 
 `set_speed(10.0)` stretches every timeline in the catalog, which is how a screenshot burst samples a 200ms tween frame by frame. Reduced motion is gpui's own flag: `with_animation` elements snap to their end state and schedule nothing, and `pulse_delta` returns a static 0.

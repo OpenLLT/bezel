@@ -4,7 +4,10 @@
 //! The view itself lives in `lib.rs`, so `shots` can mount its sections one at
 //! a time; this file is the window around it.
 
-use gallery::{Gallery, TRAFFIC_LIGHT_ORIGIN, ToggleFullScreen, ToggleInspector};
+use gallery::{
+    Gallery, ResetFrameOverlayStats, TRAFFIC_LIGHT_X, TRAFFIC_LIGHT_Y, ToggleFpsOverlay,
+    ToggleFullScreen,
+};
 use gpui::{
     App, AppContext as _, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds,
     WindowOptions, actions, point, px, size,
@@ -25,28 +28,28 @@ fn main() {
             appearance::init(appearance::AppearanceMode::System, cx);
             gallery::init(cx);
             cx.bind_keys([
-                KeyBinding::new("cmd-alt-i", ToggleInspector, None),
+                // The chords zed's own keymap carries for these two.
+                KeyBinding::new("ctrl-alt-shift-p", ToggleFpsOverlay, None),
+                KeyBinding::new("ctrl-alt-shift-o", ResetFrameOverlayStats, None),
                 // Both of the macOS defaults. Bound before `set_menus` so the
                 // menu item can pick the keystroke up off the keymap.
                 KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
                 KeyBinding::new("fn-f", ToggleFullScreen, None),
             ]);
-            #[cfg(debug_assertions)]
-            gallery::inspector::init(cx);
             set_menus(cx);
             let bounds = Bounds::centered(None, size(px(1000.0), px(700.0)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    // No strip of its own: the traffic lights float over the
-                    // rail. `app_owns_titlebar_drag` stays false, so AppKit
+                    // No strip of its own: the traffic lights sit in the
+                    // nav. `app_owns_titlebar_drag` stays false, so AppKit
                     // still moves the window by the top edge and the app owes
                     // no drag bar of its own.
                     titlebar: Some(TitlebarOptions {
                         appears_transparent: true,
                         traffic_light_position: Some(point(
-                            px(TRAFFIC_LIGHT_ORIGIN),
-                            px(TRAFFIC_LIGHT_ORIGIN),
+                            px(TRAFFIC_LIGHT_X),
+                            px(TRAFFIC_LIGHT_Y),
                         )),
                         ..Default::default()
                     }),
